@@ -41,6 +41,9 @@ func startWebServer(cfg *Config, cfgPath string, state *Progress, progressPath s
 	mux.HandleFunc("PUT /api/foreshadows/{id}", h.PutForeshadow)
 	mux.HandleFunc("DELETE /api/foreshadows/{id}", h.DeleteForeshadow)
 
+	mux.HandleFunc("POST /api/continue/import", h.PostContinueImport)
+	mux.HandleFunc("POST /api/continue/confirm", h.PostContinueConfirm)
+
 	mux.HandleFunc("GET /api/events", h.SSEHandler)
 
 	staticFS, err := fs.Sub(staticFiles, "static")

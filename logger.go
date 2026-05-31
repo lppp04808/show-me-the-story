@@ -98,6 +98,10 @@ func (lb *LogBroadcaster) ForeshadowSuggestions(suggestions []ForeshadowSuggesti
 	lb.Emit("foreshadow_suggestions", suggestions)
 }
 
+func (lb *LogBroadcaster) ContinueAnalysisResult(data interface{}) {
+	lb.Emit("continue_analysis", data)
+}
+
 func (lb *LogBroadcaster) Close() {
 	lb.mu.Lock()
 	lb.closed = true

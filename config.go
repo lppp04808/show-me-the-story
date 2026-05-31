@@ -34,6 +34,7 @@ type PromptsConfig struct {
 	OutlineRevision    string `json:"outline_revision"`
 	ForeshadowPlanning string `json:"foreshadow_planning"`
 	ForeshadowUpdate   string `json:"foreshadow_update"`
+	ContentAnalysis    string `json:"content_analysis"`
 }
 
 func DefaultConfig() *Config {
@@ -110,5 +111,8 @@ func (p *PromptsConfig) applyDefaults() {
 	}
 	if p.ForeshadowUpdate == "" {
 		p.ForeshadowUpdate = DefaultPrompts.ForeshadowUpdate
+	}
+	if p.ContentAnalysis == "" {
+		p.ContentAnalysis = DefaultPrompts.ContentAnalysis
 	}
 }

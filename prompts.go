@@ -189,4 +189,44 @@ var DefaultPrompts = PromptsConfig{
 
 只返回有变化的伏笔。如果某条伏笔在本章完全没有被提及，不要包含在返回结果中。
 请严格以JSON格式输出，不要添加任何额外文字。`,
+
+	ContentAnalysis: `你是一位专业的小说分析编辑。请分析以下已有小说文本，提取故事元数据、为每章生成摘要，并建议后续章节大纲。
+
+【用户指定续写章节数】{{.ContinuationCount}}
+
+请以JSON格式返回，结构如下：
+{
+  "title": "小说标题",
+  "core_prompt": "核心写作提示词（用于指导后续各章创作的系统级提示）",
+  "core_requirements": "核心写作要求",
+  "writing_style": "写作风格描述",
+  "character_setting": "角色设定",
+  "world_setting": "世界观设定",
+  "chapters": [
+    {
+      "num": 1,
+      "title": "章节标题",
+      "summary": "200字以内的章节摘要"
+    }
+  ],
+  "continuation_chapters": [
+    {
+      "num": 6,
+      "title": "建议标题",
+      "outline": "本章大纲建议"
+    }
+  ]
+}
+
+分析要求：
+1. 从文本中识别章节边界（支持"第X章"、"# Chapter X"、空行分隔等常见格式）
+2. 为每章生成200字以内的摘要，保留可延续的状态信息（心理轨迹、关键细节、情绪色调）
+3. 提取故事元数据：写作风格、角色设定、世界观设定
+4. 生成 core_prompt 和 core_requirements，用于指导后续创作
+5. 根据已有内容推断后续 {{.ContinuationCount}} 章的大纲建议
+
+【已有小说文本】
+{{.ExistingContent}}
+
+请严格以JSON格式输出，不要添加任何额外文字。`,
 }

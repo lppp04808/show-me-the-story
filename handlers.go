@@ -608,6 +608,78 @@ func (h *Handlers) PostForeshadowsConfirm(w http.ResponseWriter, r *http.Request
 	h.writeJSON(w, http.StatusOK, h.state.Foreshadows)
 }
 
+func (h *Handlers) PostContinueImport(w http.ResponseWriter, r *http.Request) {
+	if !h.tryStartTask() {
+		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
+		return
+	}
+
+	var body struct {
+		Content                string `json:"content"`
+		ContinuationChapterCount int  `json:"continuation_chapter_count"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Content == "" {
+		h.endTask()
+		h.writeError(w, http.StatusBadRequest, "缺少 content 字段")
+		return
+	}
+	if body.ContinuationChapterCount <= 0 {
+		body.ContinuationChapterCount = 5
+	}
+
+	go func() {
+		h.logger.TaskStart("continue_analysis")
+
+		h.logger.Info("正在分析已有内容...")
+		analysis, err := AnalyzeExistingContent(h.cfg, body.Content, body.ContinuationChapterCount)
+
+		if err != nil {
+			h.endTask()
+			h.logger.Error(fmt.Sprintf("内容分析失败: %v", err))
+			h.logger.TaskEnd("continue_analysis", false)
+			return
+		}
+
+		h.endTask()
+		h.logger.Success(fmt.Sprintf("内容分析完成，发现 %d 章，建议续写 %d 章", len(analysis.Chapters), len(analysis.ContinuationChapters)))
+		h.logger.TaskEnd("continue_analysis", true)
+		h.logger.ContinueAnalysisResult(analysis)
+	}()
+
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
+func (h *Handlers) PostContinueConfirm(w http.ResponseWriter, r *http.Request) {
+	if h.isTaskRunning() {
+		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
+		return
+	}
+
+	if h.state.Phase != "outline" {
+		h.writeError(w, http.StatusBadRequest, "续写前请先重置进度")
+		return
+	}
+
+	var analysis ContinueAnalysis
+	if err := json.NewDecoder(r.Body).Decode(&analysis); err != nil {
+		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
+		return
+	}
+
+	if len(analysis.Chapters) == 0 && len(analysis.ContinuationChapters) == 0 {
+		h.writeError(w, http.StatusBadRequest, "分析结果中没有任何章节")
+		return
+	}
+
+	if err := ImportContinueAction(h.cfg, h.state, &analysis, h.progressPath, h.cfgPath); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "导入续写失败: "+err.Error())
+		return
+	}
+
+	h.logger.Success("续写导入完成，已进入写作阶段。")
+	h.writeJSON(w, http.StatusOK, h.state)
+}
+
 func (h *Handlers) SSEHandler(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
