@@ -59,6 +59,9 @@ func startWebServer(apiCfg *APIConfig, apiCfgPath string, cfg *Config, state *Pr
 
 	mux.HandleFunc("POST /api/task/stop", h.PostTaskStop)
 
+	mux.HandleFunc("GET /api/autoconfirm", h.GetAutoConfirm)
+	mux.HandleFunc("PUT /api/autoconfirm", h.PutAutoConfirm)
+
 	mux.HandleFunc("POST /api/settings/reconcile", h.PostSettingsReconcile)
 	mux.HandleFunc("GET /api/settings", h.GetSettings)
 	mux.HandleFunc("POST /api/settings/ai-generate", h.PostSettingsAIGenerate)

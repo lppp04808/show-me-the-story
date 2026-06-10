@@ -1,10 +1,29 @@
 <script>
-  import { tick } from 'svelte';
+  import { tick, onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { progress, taskRunning, streamingContent, streamingChapterIdx, selectedChapter, addToast } from '../lib/stores.js';
+  import { progress, taskRunning, streamingContent, streamingChapterIdx, selectedChapter, autoConfirm, addToast } from '../lib/stores.js';
 
   // 保留 prop 以兼容 App 传参
   export let sendToChat = async () => {};
+
+  onMount(async () => {
+    try {
+      const res = await api('GET', '/api/autoconfirm');
+      autoConfirm.set(!!res.enabled);
+    } catch (e) {}
+  });
+
+  async function toggleAutoConfirm(e) {
+    const enabled = e.target.checked;
+    try {
+      const res = await api('PUT', '/api/autoconfirm', { enabled });
+      autoConfirm.set(!!res.enabled);
+      addToast(res.enabled ? '已开启自动确认模式：每章生成完成后自动确认并继续下一章' : '已关闭自动确认模式：当前章节完成后停止', 'info');
+    } catch (err) {
+      e.target.checked = $autoConfirm;
+      addToast(err.message, 'error');
+    }
+  }
 
   $: p = $progress;
   $: inWriting = p?.phase === 'writing';
@@ -17,6 +36,11 @@
   // 默认选中当前章节
   $: if (inWriting && ($selectedChapter < 0 || $selectedChapter >= chapters.length)) {
     selectedChapter.set(Math.min(currentIdx, chapters.length - 1));
+  }
+
+  // 自动确认模式下，自动跟随正在生成的章节
+  $: if ($autoConfirm && $streamingChapterIdx >= 0 && $streamingChapterIdx < chapters.length && $streamingChapterIdx !== $selectedChapter) {
+    selectedChapter.set($streamingChapterIdx);
   }
 
   $: ch = $selectedChapter >= 0 && $selectedChapter < chapters.length ? chapters[$selectedChapter] : null;
@@ -129,6 +153,10 @@
       <div class="card-body p-4 gap-2">
         <div class="flex items-center gap-3">
           <h2 class="card-title text-base flex-1">写作进度</h2>
+          <label class="flex items-center gap-1.5 cursor-pointer" title="开启后：每章生成完成自动确认，并继续生成下一章，直到全部完成或关闭开关">
+            <input type="checkbox" class="toggle toggle-xs toggle-success" checked={$autoConfirm} on:change={toggleAutoConfirm} />
+            <span class="text-xs text-base-content/60">自动确认模式</span>
+          </label>
           <span class="text-xs text-base-content/40">全书约 {totalWords.toLocaleString()} 字</span>
           <button class="btn btn-ghost btn-xs" on:click={exportBook}>📤 导出 TXT</button>
         </div>
@@ -226,6 +254,7 @@
                     class="textarea textarea-sm w-full h-20 text-sm"
                     bind:value={reviseFeedback}
                     placeholder="修改意见，例如：第三段对话太生硬，改得口语化一些；把主角的剑改成长枪..."
+                    disabled={$taskRunning}
                   ></textarea>
                   <div class="flex justify-between items-center">
                     <span class="text-xs text-base-content/40">

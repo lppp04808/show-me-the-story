@@ -37,6 +37,7 @@ type Handlers struct {
 	activeWork  int
 	taskCtx     context.Context
 	taskCancel  context.CancelFunc
+	autoConfirm bool // 自动确认模式：章节生成完成后自动确认并继续生成下一章
 
 	pendingContinueContent string
 	lastChatMessage        string      // 缓存最后发送的聊天消息，用于重试
@@ -183,6 +184,48 @@ func (h *Handlers) isTaskRunning() bool {
 	return h.taskRunning || h.activeWork > 0
 }
 
+// rejectIfTaskRunning 在 AI 任务运行期间拒绝编辑类请求，防止意外提交修改。
+// 返回 true 表示已写入 409 响应，调用方应直接 return。
+func (h *Handlers) rejectIfTaskRunning(w http.ResponseWriter) bool {
+	if h.isTaskRunning() {
+		h.writeError(w, http.StatusConflict, "有AI任务正在运行，暂不能修改，请等待任务完成或先停止任务")
+		return true
+	}
+	return false
+}
+
+func (h *Handlers) isAutoConfirmOn() bool {
+	h.taskMu.Lock()
+	defer h.taskMu.Unlock()
+	return h.autoConfirm
+}
+
+func (h *Handlers) GetAutoConfirm(w http.ResponseWriter, r *http.Request) {
+	h.writeJSON(w, http.StatusOK, map[string]bool{"enabled": h.isAutoConfirmOn()})
+}
+
+// PutAutoConfirm 切换自动确认模式，任务运行期间也可随时开关。
+func (h *Handlers) PutAutoConfirm(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
+		return
+	}
+
+	h.taskMu.Lock()
+	h.autoConfirm = req.Enabled
+	h.taskMu.Unlock()
+
+	if req.Enabled {
+		h.logger.Info("已开启自动确认模式：每章生成完成后将自动确认并继续生成下一章")
+	} else {
+		h.logger.Info("已关闭自动确认模式")
+	}
+	h.writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
+}
+
 func (h *Handlers) PostTaskStop(w http.ResponseWriter, r *http.Request) {
 	h.taskMu.Lock()
 	if !h.taskRunning {
@@ -202,6 +245,9 @@ func (h *Handlers) GetAPIConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PutAPIConfig(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	var newCfg APIConfig
 	if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
@@ -231,6 +277,9 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PutConfig(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	var newCfg Config
 	if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
@@ -430,27 +479,50 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 		h.logger.TaskStart("chapter_generation")
 		ctx := h.taskCtx
 
-		chIdx := h.state.CurrentChapterIndex
-		chTitle := ""
-		if chIdx < len(h.state.Chapters) {
-			chTitle = h.state.Chapters[chIdx].Title
-		}
-
-		h.logger.Info(fmt.Sprintf("正在创作第 %d 章...", chIdx+1))
-		err := GenerateChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.logger)
-
-		if err != nil {
-			if ctx.Err() != nil {
-				h.logger.Warn("章节创作已取消")
-				h.logger.TaskEnd("chapter_generation", false)
-			} else {
-				h.logger.Error(fmt.Sprintf("章节创作失败: %v", err))
-				h.logger.TaskEnd("chapter_generation", false)
+		for {
+			chIdx := h.state.CurrentChapterIndex
+			chTitle := ""
+			if chIdx < len(h.state.Chapters) {
+				chTitle = h.state.Chapters[chIdx].Title
 			}
-			return
+
+			h.logger.Info(fmt.Sprintf("正在创作第 %d 章...", chIdx+1))
+			err := GenerateChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.logger)
+
+			if err != nil {
+				if ctx.Err() != nil {
+					h.logger.Warn("章节创作已取消")
+				} else {
+					h.logger.Error(fmt.Sprintf("章节创作失败: %v", err))
+				}
+				h.logger.TaskEnd("chapter_generation", false)
+				return
+			}
+
+			h.logger.Success(fmt.Sprintf("第 %d 章《%s》创作完成！", chIdx+1, chTitle))
+			h.broadcastProgress()
+
+			// 自动确认模式：自动确认本章并继续生成下一章；关闭开关后在本章结束时停止
+			if !h.isAutoConfirmOn() {
+				break
+			}
+			if err := ConfirmChapterAction(h.state, h.progressPath); err != nil {
+				h.logger.Warn(fmt.Sprintf("自动确认失败: %v", err))
+				break
+			}
+			h.logger.Success(fmt.Sprintf("第 %d 章《%s》已自动确认。", chIdx+1, chTitle))
+			h.broadcastProgress()
+
+			if h.state.CurrentChapterIndex >= len(h.state.Chapters) {
+				h.logger.Success("全部章节已创作完成！")
+				break
+			}
+			if ctx.Err() != nil {
+				h.logger.Warn("任务已取消，停止自动续写")
+				break
+			}
 		}
 
-		h.logger.Success(fmt.Sprintf("第 %d 章《%s》创作完成！", chIdx+1, chTitle))
 		h.logger.TaskEnd("chapter_generation", true)
 		h.broadcastProgress()
 	}()
@@ -808,6 +880,7 @@ func (h *Handlers) GetStatus(w http.ResponseWriter, r *http.Request) {
 		"title":           h.state.Title,
 		"total_chapters":  len(h.state.Chapters),
 		"is_task_running": h.isTaskRunning(),
+		"auto_confirm":    h.isAutoConfirmOn(),
 	})
 }
 
@@ -859,6 +932,9 @@ func (h *Handlers) PostForeshadowsSuggest(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handlers) PostForeshadow(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	var req struct {
 		Name          string `json:"name"`
 		Description   string `json:"description"`
@@ -899,6 +975,9 @@ func (h *Handlers) PostForeshadow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PutForeshadow(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	idStr := r.PathValue("id")
 	var id int
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
@@ -960,6 +1039,9 @@ func (h *Handlers) PutForeshadow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DeleteForeshadow(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	idStr := r.PathValue("id")
 	var id int
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
@@ -990,6 +1072,9 @@ func (h *Handlers) DeleteForeshadow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PostForeshadowsConfirm(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	var req struct {
 		Foreshadows []Foreshadow `json:"foreshadows"`
 	}
@@ -1184,6 +1269,9 @@ func (h *Handlers) GetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PostCharacter(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	var c Character
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
@@ -1206,6 +1294,9 @@ func (h *Handlers) PostCharacter(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PutCharacter(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	var req Character
@@ -1255,6 +1346,9 @@ func (h *Handlers) PutCharacter(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DeleteCharacter(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	for i, c := range h.settings.Characters {
@@ -1273,6 +1367,9 @@ func (h *Handlers) DeleteCharacter(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PostWorldview(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	var wv WorldviewEntry
 	if err := json.NewDecoder(r.Body).Decode(&wv); err != nil {
 		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
@@ -1295,6 +1392,9 @@ func (h *Handlers) PostWorldview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PutWorldview(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	var req WorldviewEntry
@@ -1332,6 +1432,9 @@ func (h *Handlers) PutWorldview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DeleteWorldview(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	for i, wv := range h.settings.Worldview {
@@ -1350,6 +1453,9 @@ func (h *Handlers) DeleteWorldview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PostOrganization(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	var o Organization
 	if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
 		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
@@ -1372,6 +1478,9 @@ func (h *Handlers) PostOrganization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PutOrganization(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	var req Organization
@@ -1409,6 +1518,9 @@ func (h *Handlers) PutOrganization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DeleteOrganization(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	for i, o := range h.settings.Organizations {
@@ -1427,6 +1539,9 @@ func (h *Handlers) DeleteOrganization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PostRelation(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	var rel Relation
 	if err := json.NewDecoder(r.Body).Decode(&rel); err != nil {
 		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
@@ -1449,6 +1564,9 @@ func (h *Handlers) PostRelation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PutRelation(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	var req Relation
@@ -1489,6 +1607,9 @@ func (h *Handlers) PutRelation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DeleteRelation(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	for i, rel := range h.settings.Relations {
@@ -1537,6 +1658,9 @@ func (h *Handlers) GetSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PutSkillToggle(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	var req struct {
@@ -1619,6 +1743,9 @@ func (h *Handlers) GetChatSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
 	id := r.PathValue("id")
 
 	if err := DeleteChatSession(h.sessionsDir, id); err != nil {

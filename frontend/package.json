@@ -15,5 +15,9 @@
     "svelte": "^4.2.18",
     "tailwindcss": "^4",
     "vite": "^5.3.1"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.9",
+    "marked": "^18.0.5"
   }
 }

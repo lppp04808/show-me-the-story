@@ -78,6 +78,13 @@ func (lb *LogBroadcaster) StepInfo(step, total int, msg string) {
 	lb.Log("info", fmt.Sprintf("[%d/%d] %s", step, total, msg))
 }
 
+// StreamStart 通知前端：某章节的流式输出即将开始，应清空之前的流式缓冲。
+func (lb *LogBroadcaster) StreamStart(chapterIdx int) {
+	lb.Emit("stream_start", map[string]interface{}{
+		"chapter_idx": chapterIdx,
+	})
+}
+
 func (lb *LogBroadcaster) StreamProgress(chapterIdx int, charCount int) {
 	lb.Emit("stream_progress", map[string]interface{}{
 		"chapter_idx": chapterIdx,

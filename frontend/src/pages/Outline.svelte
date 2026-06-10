@@ -135,7 +135,7 @@
         <div class="card-body p-4 gap-2">
           <h3 class="card-title text-base">导入已有内容</h3>
           <p class="text-xs text-base-content/50">粘贴已写好的小说文本（支持「第X章」等常见章节格式），AI 将分析章节结构和故事设定，导入后可继续生成后续章节。</p>
-          <textarea class="textarea w-full h-48 text-sm font-serif" bind:value={importContent} placeholder="在此粘贴小说全文..."></textarea>
+          <textarea class="textarea w-full h-48 text-sm font-serif" bind:value={importContent} placeholder="在此粘贴小说全文..." disabled={$taskRunning}></textarea>
           <div class="flex justify-end gap-2">
             <button class="btn btn-ghost btn-xs" on:click={() => { showImport = false; importContent = ''; }}>取消</button>
             <button class="btn btn-primary btn-xs" on:click={importExisting} disabled={$taskRunning || !importContent.trim()}>开始分析</button>
@@ -151,20 +151,20 @@
           <div class="grid grid-cols-2 gap-2">
             <div>
               <span class="text-xs text-base-content/50 mb-0.5 block">标题</span>
-              <input type="text" class="input input-sm w-full" bind:value={$continueAnalysis.title} />
+              <input type="text" class="input input-sm w-full" bind:value={$continueAnalysis.title} disabled={$taskRunning} />
             </div>
             <div>
               <span class="text-xs text-base-content/50 mb-0.5 block">故事类型</span>
-              <input type="text" class="input input-sm w-full" bind:value={$continueAnalysis.story_type} />
+              <input type="text" class="input input-sm w-full" bind:value={$continueAnalysis.story_type} disabled={$taskRunning} />
             </div>
           </div>
           <div>
             <span class="text-xs text-base-content/50 mb-0.5 block">故事梗概</span>
-            <textarea class="textarea textarea-sm w-full h-20 text-sm" bind:value={$continueAnalysis.story_synopsis}></textarea>
+            <textarea class="textarea textarea-sm w-full h-20 text-sm" bind:value={$continueAnalysis.story_synopsis} disabled={$taskRunning}></textarea>
           </div>
           <div>
             <span class="text-xs text-base-content/50 mb-0.5 block">写作风格</span>
-            <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={$continueAnalysis.writing_style}></textarea>
+            <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={$continueAnalysis.writing_style} disabled={$taskRunning}></textarea>
           </div>
           <div class="text-xs text-base-content/50">识别到 {$continueAnalysis.chapters?.length || 0} 章</div>
           <div class="max-h-48 overflow-y-auto space-y-1">
@@ -194,7 +194,7 @@
           <button class="btn btn-ghost btn-xs" on:click={() => showRevise = !showRevise} disabled={$taskRunning}>✏️ 提修改意见</button>
           {#if hasAccepted}
             <div class="join">
-              <input type="number" min="1" max="50" class="input input-xs join-item w-14" bind:value={continuationCount} />
+              <input type="number" min="1" max="50" class="input input-xs join-item w-14" bind:value={continuationCount} disabled={$taskRunning} />
               <button class="btn btn-primary btn-xs join-item" on:click={generateContinuation} disabled={$taskRunning}>＋生成后续大纲</button>
             </div>
           {:else if inOutlinePhase}
@@ -207,7 +207,7 @@
 
         {#if showRevise}
           <div class="bg-base-300 rounded-lg p-3 space-y-2">
-            <textarea class="textarea textarea-sm w-full h-20 text-sm" bind:value={reviseFeedback} placeholder="对大纲的修改意见，例如：第 10 章节奏太慢，把冲突提前；结局改为开放式..."></textarea>
+            <textarea class="textarea textarea-sm w-full h-20 text-sm" bind:value={reviseFeedback} placeholder="对大纲的修改意见，例如：第 10 章节奏太慢，把冲突提前；结局改为开放式..." disabled={$taskRunning}></textarea>
             <div class="flex justify-between items-center">
               <span class="text-xs text-base-content/40">已确认章节不会被改动</span>
               <div class="flex gap-2">
@@ -246,9 +246,9 @@
               <div class="bg-base-300 rounded-lg p-3 space-y-2 ring-1 ring-primary/50">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-bold text-base-content/50 shrink-0">第 {ch.num} 章</span>
-                  <input type="text" class="input input-sm flex-1" bind:value={editTitle} placeholder="章节标题" />
+                  <input type="text" class="input input-sm flex-1" bind:value={editTitle} placeholder="章节标题" disabled={$taskRunning} />
                 </div>
-                <textarea class="textarea textarea-sm w-full h-24 text-sm" bind:value={editOutline} placeholder="本章大纲"></textarea>
+                <textarea class="textarea textarea-sm w-full h-24 text-sm" bind:value={editOutline} placeholder="本章大纲" disabled={$taskRunning}></textarea>
                 <div class="flex justify-end gap-2">
                   <button class="btn btn-ghost btn-xs" on:click={cancelEdit}>取消</button>
                   <button class="btn btn-success btn-xs" on:click={saveEdit} disabled={$taskRunning}>保存</button>

@@ -52,11 +52,15 @@
   <header class="navbar bg-base-200 border-b border-base-content/10 px-6 min-h-[46px] shrink-0 gap-4">
     <span class="text-lg font-semibold">AI 小说生成器</span>
     {#if $currentProject}
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <span class="badge badge-sm badge-outline cursor-pointer hover:badge-primary transition-colors" on:click={backToProjects} title="点击切换项目">
-        {$currentProject} ✕
-      </span>
+      <span class="badge badge-sm badge-outline">{$currentProject}</span>
+      <button
+        class="btn btn-ghost btn-xs gap-1"
+        on:click={backToProjects}
+        disabled={$taskRunning}
+        title={$taskRunning ? 'AI 任务进行中，暂不能切换项目' : '关闭当前项目，返回项目列表（可切换或新建项目）'}
+      >
+        ⇄ 切换 / 新建项目
+      </button>
       <span class="badge badge-sm" class:badge-primary={$progress}>{phase}</span>
       {#if chapterStats}
         <span class="badge badge-sm badge-ghost">{chapterStats}</span>

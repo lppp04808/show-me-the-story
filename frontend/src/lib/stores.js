@@ -17,6 +17,10 @@ export const selectedChapter = writable(-1);
 
 export const streamingContent = writable('');
 export const streamingChapterIdx = writable(-1);
+// 当前任务流式输出累计字数（章节正文 + 助理回复）
+export const streamCharCount = writable(0);
+// 自动确认模式（每章生成完成后自动确认并继续下一章）
+export const autoConfirm = writable(false);
 
 export const chatSessions = writable(null);
 export const currentChatSession = writable(null);

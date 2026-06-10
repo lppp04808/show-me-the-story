@@ -1,7 +1,8 @@
 <script>
   import { onMount, afterUpdate } from 'svelte';
   import { api } from '../lib/api.js';
-  import { chatSessions, currentChatSession, addToast, showConfirm, taskRunning, lastFailedTask, logEntries, currentTaskName } from '../lib/stores.js';
+  import { renderMarkdown } from '../lib/markdown.js';
+  import { chatSessions, currentChatSession, addToast, showConfirm, taskRunning, lastFailedTask, logEntries, currentTaskName, streamCharCount } from '../lib/stores.js';
 
   export let contextPage = 'config';
 
@@ -279,6 +280,9 @@
           <span class="text-success text-xs">●</span>
         {/if}
         <span class="text-xs font-semibold text-base-content/70">{$currentTaskName || '任务'}{$taskRunning ? ' 进行中' : ' 已结束'}</span>
+        {#if $taskRunning && $streamCharCount > 0}
+          <span class="badge badge-xs badge-info gap-1 font-mono">已生成 {$streamCharCount.toLocaleString()} 字</span>
+        {/if}
         <span class="text-xs text-base-content/40 ml-auto">{taskStatusCollapsed ? '展开 ▾' : '收起 ▴'}</span>
       </div>
       {#if !taskStatusCollapsed && taskLogs.length > 0}
@@ -334,7 +338,7 @@
               <div class="chat chat-start">
                 <div class="chat-bubble bg-warning/20 border border-warning/40 text-sm max-w-[85%]">
                   <div class="text-warning font-semibold mb-1">⚠️ 该回复可能未实际执行操作</div>
-                  <div class="text-base-content/70 whitespace-pre-wrap">{m.content}</div>
+                  <div class="text-base-content/70 md-body">{@html renderMarkdown(m.content)}</div>
                 </div>
               </div>
             {:else}
@@ -350,7 +354,7 @@
                   </div>
                 {:else if seg.content.trim()}
                   <div class="chat chat-start">
-                    <div class="chat-bubble bg-base-300 text-sm whitespace-pre-wrap max-w-[85%]">{seg.content.trim()}</div>
+                    <div class="chat-bubble bg-base-300 text-sm max-w-[85%] md-body">{@html renderMarkdown(seg.content.trim())}</div>
                   </div>
                 {/if}
               {/each}
@@ -397,7 +401,7 @@
             </div>
           {:else if seg.content.trim()}
             <div class="chat chat-start">
-              <div class="chat-bubble bg-base-300 text-sm whitespace-pre-wrap max-w-[85%]">{seg.content.trim()}<span class="inline-block w-1.5 h-3.5 bg-primary/70 animate-pulse ml-0.5 align-text-bottom"></span></div>
+              <div class="chat-bubble bg-base-300 text-sm max-w-[85%]"><span class="md-body">{@html renderMarkdown(seg.content.trim())}</span><span class="inline-block w-1.5 h-3.5 bg-primary/70 animate-pulse ml-0.5 align-text-bottom"></span></div>
             </div>
           {/if}
         {/each}

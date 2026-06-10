@@ -313,6 +313,8 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 		}
 	}
 
+	// 通知前端清空流式缓冲（事实核查重试/自动连写时避免内容叠加）
+	logger.StreamStart(idx)
 	return CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
 }
 
@@ -451,6 +453,7 @@ func reviseChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Con
 		}
 	}
 
+	logger.StreamStart(chapterIdx)
 	return CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
 }
 
@@ -558,6 +561,7 @@ func PolishChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 		}
 	}
 
+	logger.StreamStart(chapterIdx)
 	result, err := CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
 	if err != nil {
 		return fmt.Errorf("润色失败: %w", err)
