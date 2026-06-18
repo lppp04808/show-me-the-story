@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -14,6 +15,97 @@ func preferUserValue(userVal, fallback string) string {
 		return userVal
 	}
 	return fallback
+}
+
+var (
+	chapterMetaStartZH = regexp.MustCompile(`^[（(]?第\s*\d+\s*章`)
+	chapterMetaStartEN = regexp.MustCompile(`(?i)^(?:chapter\s+\d+|part\s+\d+)`)
+	// 匹配 AI 常见的元信息前缀行
+	chapterMetaPreambleZH = regexp.MustCompile(`(?i)^(以下是|下面是|以上是|这是)?(以下为|以下是)?(修订后|修改后|润色后|重写后)?(的)?(完整)?(全文)?(第\s*\d+\s*章)?(正文|全文|完整正文|修订后正文)?[：:。.]?\s*$`)
+	chapterMetaPreambleEN = regexp.MustCompile(`(?i)^(here\s+(?:is|are)|below\s+is|the\s+following\s+is|revised|full)\b.*(?:chapter|text|prose|content|version)`)
+)
+
+// stripChapterMetaProse trims common AI-emitted chapter framing lines from prose boundaries.
+// ponytail: line-based heuristics only; won't catch inline meta. Upgrade: model instructions + structured output.
+func stripChapterMetaProse(content string, lang string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for len(lines) > 0 && isChapterMetaLine(strings.TrimSpace(lines[0]), lang) {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && isChapterMetaLine(strings.TrimSpace(lines[len(lines)-1]), lang) {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func isChapterMetaLine(line string, lang string) bool {
+	if line == "" {
+		return false
+	}
+	exact := []string{
+		"本章完", "本章终", "待续", "未完待续", "（完）", "(完)", "完", "——", "—", "***", "---", "***",
+		"End of chapter", "To be continued", "The End",
+	}
+	for _, s := range exact {
+		if line == s || strings.HasPrefix(line, s+".") || strings.HasPrefix(line, s+"。") {
+			return true
+		}
+	}
+	if NormalizeLanguage(lang) == LangEN {
+		if chapterMetaStartEN.MatchString(line) {
+			return true
+		}
+		if matched, _ := regexp.MatchString(`(?i)^\(chapter\s+\d+.*\)$`, line); matched {
+			return true
+		}
+		if chapterMetaPreambleEN.MatchString(line) {
+			return true
+		}
+		return false
+	}
+	if chapterMetaStartZH.MatchString(line) {
+		return true
+	}
+	if matched, _ := regexp.MatchString(`^[（(]第\s*\d+\s*章[^）)]*[）)]$`, line); matched {
+		return true
+	}
+	if chapterMetaPreambleZH.MatchString(line) {
+		return true
+	}
+	// 匹配 "以下为修订后的第X章完整正文" 等含章节号的元信息行
+	if matched, _ := regexp.MatchString(`^.{0,10}(修订|修改|润色|重写).{0,5}第\s*\d+\s*章`, line); matched {
+		return true
+	}
+	if matched, _ := regexp.MatchString(`^.{0,10}(完整|全部)?(正文|全文|内容).{0,5}(如下|如下方|如下所示)[：:。.]?\s*$`, line); matched {
+		return true
+	}
+	return false
+}
+
+func formatWritingPOVBlock(pov, lang string) string {
+	pov = strings.TrimSpace(pov)
+	if pov == "" {
+		return ""
+	}
+	if NormalizeLanguage(lang) == LangEN {
+		return "[Narrative POV] " + pov
+	}
+	return "【叙述视角】" + pov
+}
+
+func formatExtraWritingConstraintsBlock(constraints, lang string) string {
+	constraints = strings.TrimSpace(constraints)
+	if constraints == "" {
+		return ""
+	}
+	if NormalizeLanguage(lang) == LangEN {
+		return "[Extra writing constraints (fact-check reconciliation)]\n" + constraints
+	}
+	return "【补充写作约束（事实核查冲突调和）】\n" + constraints
 }
 
 func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath string, settings *ProjectSettings, logger *LogBroadcaster) error {
@@ -40,7 +132,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("开始创作第 %d 章: 《%s》", ch.Num, ch.Title))
+	logger.InfoKey("log.chapter_start", ch.Num, ch.Title)
 
 	// 写前检查：本章大纲若已与实际写出的剧情冲突（如大纲安排初遇但前文已认识），
 	// 先最小化修订大纲再动笔，避免按过时大纲写出矛盾内容。
@@ -48,29 +140,36 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 		logger.StepInfo(1, 5, "正在检查本章大纲与当前剧情的一致性...")
 		revised, err := checkOutlineConsistency(ctx, apiCfg, cfg, state, i, logger)
 		if err != nil {
-			logger.Warn(fmt.Sprintf("大纲一致性检查失败: %v（按原大纲继续）", err))
+			logger.WarnKey("log.outline_check_failed", err)
 		} else if revised {
 			if err := SaveProgress(progressPath, state); err != nil {
 				return err
 			}
-			logger.Info("本章大纲已自动修订以匹配当前剧情")
+			logger.InfoKey("log.outline_auto_revised")
 		} else {
-			logger.Info("本章大纲与当前剧情一致 ✓")
+			logger.InfoKey("log.outline_consistent")
 		}
 	}
 
+	if len(state.Foreshadows) > 0 {
+		RunForeshadowOutlineCheckAndSave(ctx, apiCfg, cfg, state, progressPath, logger)
+	}
+
 	maxFactCheckRetries := 3
+	extraConstraints := ""
+	var accumulatedIssues []string
+
 	for attempt := 0; attempt <= maxFactCheckRetries; attempt++ {
 		if ctx.Err() != nil {
 			return fmt.Errorf("任务已取消")
 		}
 		logger.StepInfo(2, 5, "正在构思并撰写正文...")
-		content := generateChapterContentStreamWithRetryLog(ctx, apiCfg, cfg, state, i, settings, logger)
+		content := generateChapterContentStreamWithRetryLog(ctx, apiCfg, cfg, state, i, settings, extraConstraints, logger)
 		if content == "" {
 			return fmt.Errorf("正文生成失败或被取消")
 		}
 		ch.Content = content
-		logger.Info(fmt.Sprintf("正文撰写完毕，共 %d 字", len([]rune(content))))
+		logger.InfoKey("log.prose_done", len([]rune(content)))
 
 		logger.StepInfo(3, 5, "正在提炼本章摘要...")
 		summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
@@ -78,7 +177,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 			return fmt.Errorf("摘要提炼失败或被取消")
 		}
 		ch.Summary = summary
-		logger.Info("摘要提炼完成")
+		logger.InfoKey("log.summary_done")
 
 		logger.StepInfo(4, 5, "正在对本章进行事实核查...")
 		historySummary := buildHistorySummary(state, i)
@@ -86,17 +185,58 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 
 		failed, issues := parseFactCheckResult(factCheckResult)
 		if failed {
+			accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues))
 			if attempt < maxFactCheckRetries {
-				logger.Warn(fmt.Sprintf("[事实核查] 发现问题，正在重新生成第 %d 章（第 %d 次重试）...", ch.Num, attempt+1))
-				logger.Warn(fmt.Sprintf("核查详情: %s", issues))
+				logger.WarnKey("log.factcheck_retry", ch.Num, attempt+1)
+				logger.WarnKey("log.factcheck_details", issues)
 				continue
 			}
-			logger.Warn("[事实核查] 已达最大重试次数，保留当前版本。")
-		} else {
-			logger.Info("[事实核查] 通过 ✓")
+
+			logger.WarnKey("log.factcheck_max_retries")
+			analysis, err := analyzeWritingConflict(ctx, apiCfg, cfg, state, i, content, accumulatedIssues, logger)
+			if err != nil {
+				logger.WarnKey("log.conflict_analyze_failed", err)
+				break
+			}
+
+			if analysis.Reconcilable && strings.TrimSpace(analysis.ExtraConstraints) != "" {
+				logger.InfoKey("log.conflict_retry")
+				extraConstraints = strings.TrimSpace(analysis.ExtraConstraints)
+				content = generateChapterContentStreamWithRetryLog(ctx, apiCfg, cfg, state, i, settings, extraConstraints, logger)
+				if content == "" {
+					return fmt.Errorf("正文生成失败或被取消")
+				}
+				ch.Content = content
+				summary = generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
+				if summary == "" {
+					return fmt.Errorf("摘要提炼失败或被取消")
+				}
+				ch.Summary = summary
+				factCheckResult = generateChapterFactCheckWithRetryLog(ctx, apiCfg, cfg, state, i, content, historySummary, logger)
+				failed, issues = parseFactCheckResult(factCheckResult)
+				if failed {
+					accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues))
+				} else {
+					logger.InfoKey("log.factcheck_constraint_pass")
+					break
+				}
+			}
+
+			conflict := buildWritingConflict(state, i, accumulatedIssues, analysis)
+			lang := cfg.Language
+			conflict.SuggestedActions = ensureConflictActions(conflict.SuggestedActions, lang)
+			state.PendingWritingConflict = conflict
+			if err := SaveProgress(progressPath, state); err != nil {
+				return err
+			}
+			logger.WritingConflict(conflict)
+			return &WritingConflictError{Conflict: conflict}
 		}
+		logger.InfoKey("log.factcheck_pass")
 		break
 	}
+
+	state.PendingWritingConflict = nil
 
 	if len(state.Foreshadows) > 0 {
 		logger.StepInfo(5, 5, "正在更新伏笔状态...")
@@ -111,7 +251,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 		return err
 	}
 
-	logger.Success(fmt.Sprintf("第 %d 章创作完成！", ch.Num))
+	logger.SuccessKey("log.chapter_write_complete", ch.Num)
 	return nil
 }
 
@@ -184,7 +324,7 @@ func checkOutlineConsistency(ctx context.Context, apiCfg *APIConfig, cfg *Config
 		return false, nil
 	}
 
-	logger.Warn(fmt.Sprintf("第 %d 章大纲与当前剧情冲突: %s", ch.Num, strings.Join(resp.Issues, "；")))
+	logger.WarnKey("log.outline_conflict", ch.Num, strings.Join(resp.Issues, "；"))
 	ch.Outline = strings.TrimSpace(resp.RevisedOutline)
 	return true, nil
 }
@@ -209,7 +349,7 @@ func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 		return fmt.Errorf("当前章节不在审核/写作状态")
 	}
 
-	logger.Info(fmt.Sprintf("正在修改第 %d 章《%s》...", ch.Num, ch.Title))
+	logger.InfoKey("log.chapter_modifying", ch.Num, ch.Title)
 
 	logger.StepInfo(1, 3, "正在根据意见修订正文...")
 	revisedContent, err := reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, feedback, settings, logger)
@@ -217,7 +357,7 @@ func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 		return fmt.Errorf("修改章节失败: %w", err)
 	}
 	ch.Content = revisedContent
-	logger.Info(fmt.Sprintf("正文修改完毕，共 %d 字", len([]rune(revisedContent))))
+	logger.InfoKey("log.prose_revised", len([]rune(revisedContent)))
 
 	logger.StepInfo(2, 3, "重新提炼摘要...")
 	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, ch.Content, logger)
@@ -225,16 +365,16 @@ func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 		return fmt.Errorf("摘要提炼失败或被取消")
 	}
 	ch.Summary = summary
-	logger.Info("摘要提炼完成")
+	logger.InfoKey("log.summary_done")
 
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 
 	if chapterIdx+1 < len(state.Chapters) {
 		logger.StepInfo(3, 3, "正在修订后续章节大纲...")
 		if err := reviseSubsequentOutlines(ctx, apiCfg, cfg, state, chapterIdx, feedback); err != nil {
-			logger.Warn(fmt.Sprintf("后续大纲修订失败: %v（不影响当前章节）", err))
+			logger.WarnKey("log.subsequent_outline_failed", err)
 		} else {
-			logger.Info("后续大纲修订完成")
+			logger.InfoKey("log.subsequent_outline_done")
 		}
 	}
 
@@ -250,7 +390,7 @@ func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 		}
 	}
 
-	logger.Success(fmt.Sprintf("第 %d 章已修订。", ch.Num))
+	logger.SuccessKey("log.chapter_revised")
 	return nil
 }
 
@@ -283,7 +423,7 @@ func ReviseSpecificChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Co
 		return fmt.Errorf("第 %d 章正在写作中，无法修订", chapterNum)
 	}
 
-	logger.Info(fmt.Sprintf("正在对第 %d 章《%s》进行定向修订（不影响其他章节）...", ch.Num, ch.Title))
+	logger.InfoKey("log.chapter_specific_revising_long", ch.Num, ch.Title)
 
 	logger.StepInfo(1, 2, "正在根据意见修订正文...")
 	revisedContent, err := reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, feedback, settings, logger)
@@ -291,7 +431,7 @@ func ReviseSpecificChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Co
 		return fmt.Errorf("修订章节失败: %w", err)
 	}
 	ch.Content = revisedContent
-	logger.Info(fmt.Sprintf("正文修订完毕，共 %d 字", len([]rune(revisedContent))))
+	logger.InfoKey("log.prose_specific_revised", len([]rune(revisedContent)))
 
 	logger.StepInfo(2, 2, "重新提炼摘要...")
 	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, ch.Content, logger)
@@ -313,7 +453,7 @@ func ReviseSpecificChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Co
 		}
 	}
 
-	logger.Success(fmt.Sprintf("第 %d 章定向修订完成（其余章节未受影响）。", ch.Num))
+	logger.SuccessKey("log.chapter_specific_done", ch.Num)
 	return nil
 }
 
@@ -337,7 +477,7 @@ func ConfirmChapterAction(state *Progress, progressPath string) error {
 	return SaveProgress(progressPath, state)
 }
 
-func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, settings *ProjectSettings, logger *LogBroadcaster) (string, error) {
+func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraints string, logger *LogBroadcaster) (string, error) {
 	ch := state.Chapters[idx]
 	lang := cfg.Language
 
@@ -364,6 +504,7 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 		"ChapterTitle":       ch.Title,
 		"ChapterOutline":     ch.Outline,
 		"WritingStyle":       cfg.Story.WritingStyle,
+		"WritingPOV":         cfg.Story.WritingPOV,
 		"CharacterContext":   characterContext,
 		"WorldviewContext":   worldviewContext,
 		"TargetWords":        fmt.Sprintf("%d", snapshot.TargetWordsPerChapter),
@@ -372,46 +513,47 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 	})
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.OutlineConstraints}}", outlineConstraints)
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.Foreshadows}}", foreshadowContext)
+	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.WritingPOV}}", formatWritingPOVBlock(cfg.Story.WritingPOV, lang))
+	if block := formatExtraWritingConstraintsBlock(extraWritingConstraints, lang); block != "" {
+		userPrompt += "\n\n" + block
+	}
 
 	systemPrompt := state.CorePrompt
 	if systemPrompt == "" {
 		systemPrompt = SystemPromptFor(lang, "author_default")
 	}
 
-	totalChars := 0
-	nextReport := 500
 	onChunk := func(chunk string) {
 		logger.ContentChunk(idx, chunk)
-		totalChars += len([]rune(chunk))
-		if totalChars >= nextReport {
-			logger.StreamProgress(idx, totalChars)
-			nextReport += 500
-		}
 	}
 
 	// 通知前端清空流式缓冲（事实核查重试/自动连写时避免内容叠加）
 	logger.StreamStart(idx)
-	return CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
+	content, err := CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
+	if err != nil {
+		return "", err
+	}
+	return stripChapterMetaProse(content, lang), nil
 }
 
-func generateChapterContentStreamWithRetryLog(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, settings *ProjectSettings, logger *LogBroadcaster) string {
+func generateChapterContentStreamWithRetryLog(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraints string, logger *LogBroadcaster) string {
 	retryCount := 0
 	for {
 		if ctx.Err() != nil {
 			return ""
 		}
-		content, err := generateChapterContentStream(ctx, apiCfg, cfg, state, idx, settings, logger)
+		content, err := generateChapterContentStream(ctx, apiCfg, cfg, state, idx, settings, extraWritingConstraints, logger)
 		if err == nil && content != "" {
 			return content
 		}
 		if isFatalAPIError(err) {
-			logger.Error(fmt.Sprintf("致命错误: %v，不再重试", err))
+			logger.ErrorKey("log.fatal_no_retry", err)
 			return ""
 		}
 
 		retryCount++
 		waitTime := getWaitTime(retryCount)
-		logger.Warn(fmt.Sprintf("正文生成失败: %v。第 %d 次重试，等待 %ds...", err, retryCount, waitTime))
+		logger.WarnKey("log.content_gen_retry", err, retryCount, waitTime)
 		select {
 		case <-time.After(time.Duration(waitTime) * time.Second):
 		case <-ctx.Done():
@@ -440,13 +582,13 @@ func generateChapterSummaryWithRetryLog(ctx context.Context, apiCfg *APIConfig, 
 			return summary
 		}
 		if isFatalAPIError(err) {
-			logger.Error(fmt.Sprintf("致命错误: %v，不再重试", err))
+			logger.ErrorKey("log.fatal_no_retry", err)
 			return ""
 		}
 
 		retryCount++
 		waitTime := getWaitTime(retryCount)
-		logger.Warn(fmt.Sprintf("摘要提炼失败: %v。第 %d 次重试，等待 %ds...", err, retryCount, waitTime))
+		logger.WarnKey("log.summary_retry", err, retryCount, waitTime)
 		select {
 		case <-time.After(time.Duration(waitTime) * time.Second):
 		case <-ctx.Done():
@@ -499,13 +641,13 @@ func generateChapterFactCheckWithRetryLog(ctx context.Context, apiCfg *APIConfig
 			return result
 		}
 		if isFatalAPIError(err) {
-			logger.Error(fmt.Sprintf("致命错误: %v，不再重试", err))
+			logger.ErrorKey("log.fatal_no_retry", err)
 			return ""
 		}
 
 		retryCount++
 		waitTime := getWaitTime(retryCount)
-		logger.Warn(fmt.Sprintf("事实核查失败: %v。第 %d 次重试，等待 %ds...", err, retryCount, waitTime))
+		logger.WarnKey("log.factcheck_api_retry", err, retryCount, waitTime)
 		select {
 		case <-time.After(time.Duration(waitTime) * time.Second):
 		case <-ctx.Done():
@@ -529,11 +671,13 @@ func reviseChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Con
 		"CorePrompt":       state.CorePrompt,
 		"HistorySummary":   historySummary,
 		"WritingStyle":     cfg.Story.WritingStyle,
+		"WritingPOV":       cfg.Story.WritingPOV,
 		"CharacterContext": characterContext,
 		"WorldviewContext": worldviewContext,
 		"OriginalContent":  ch.Content,
 		"UserFeedback":     userFeedback,
 	})
+	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterRevision, userPrompt, "{{.WritingPOV}}", formatWritingPOVBlock(cfg.Story.WritingPOV, lang))
 
 	systemPrompt := state.CorePrompt
 	if systemPrompt == "" {
@@ -541,19 +685,16 @@ func reviseChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Con
 	}
 	systemPrompt += SystemPromptFor(lang, "chapter_revision_suffix")
 
-	totalChars := 0
-	nextReport := 500
 	onChunk := func(chunk string) {
 		logger.ContentChunk(chapterIdx, chunk)
-		totalChars += len([]rune(chunk))
-		if totalChars >= nextReport {
-			logger.StreamProgress(chapterIdx, totalChars)
-			nextReport += 500
-		}
 	}
 
 	logger.StreamStart(chapterIdx)
-	return CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
+	content, err := CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
+	if err != nil {
+		return "", err
+	}
+	return stripChapterMetaProse(content, lang), nil
 }
 
 func reviseSubsequentOutlines(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, currentIdx int, userFeedback string) error {
@@ -701,7 +842,7 @@ func SmoothTransitionsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config
 		return fmt.Errorf("没有可优化的章节（需要至少两个相邻的已确认章节）")
 	}
 
-	logger.Info(fmt.Sprintf("开始章节衔接优化，共 %d 章待检查", len(targets)))
+	logger.InfoKey("log.smooth_start", len(targets))
 	optimized := 0
 	for n, idx := range targets {
 		if ctx.Err() != nil {
@@ -733,7 +874,7 @@ func SmoothTransitionsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config
 			head = string([]rune(head)[:30])
 		}
 		if revised == "" || strings.Contains(head, "NO_CHANGE") {
-			logger.Info(fmt.Sprintf("第 %d 章衔接自然，无需修改", ch.Num))
+			logger.InfoKey("log.smooth_natural", ch.Num)
 			continue
 		}
 
@@ -747,10 +888,10 @@ func SmoothTransitionsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config
 			return err
 		}
 		optimized++
-		logger.Info(fmt.Sprintf("第 %d 章开头已优化并保存", ch.Num))
+		logger.InfoKey("log.smooth_optimized", ch.Num)
 	}
 
-	logger.Success(fmt.Sprintf("章节衔接优化完成：检查 %d 章，优化 %d 章", len(targets), optimized))
+	logger.SuccessKey("log.smooth_done", len(targets), optimized)
 	return nil
 }
 
@@ -771,7 +912,7 @@ func PolishChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 
 	var userPrompt string
 	if NormalizeLanguage(cfg.Language) == LangEN {
-		userPrompt = fmt.Sprintf(`Polish the chapter below according to the rules. Output the full revised chapter prose.
+		userPrompt = fmt.Sprintf(`Polish the chapter below according to the rules. Output the full revised chapter prose. Do not add chapter titles, numbers, "End of chapter", or any other meta or explanatory text.
 
 ## Polish rules
 
@@ -781,7 +922,7 @@ func PolishChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 
 %s`, skillsContent, ch.Content)
 	} else {
-		userPrompt = fmt.Sprintf(`请根据以下规则对下面的章节正文进行去AI味处理，输出修改后的完整正文。
+		userPrompt = fmt.Sprintf(`请根据以下规则对下面的章节正文进行去AI味处理，输出修改后的完整正文。不要添加章节标题、章节号、「本章完」等任何元信息或说明性文字。
 
 ## 润色规则
 
@@ -794,15 +935,8 @@ func PolishChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 
 	systemPrompt := SystemPromptFor(cfg.Language, "polish_editor")
 
-	totalChars := 0
-	nextReport := 500
 	onChunk := func(chunk string) {
 		logger.ContentChunk(chapterIdx, chunk)
-		totalChars += len([]rune(chunk))
-		if totalChars >= nextReport {
-			logger.StreamProgress(chapterIdx, totalChars)
-			nextReport += 500
-		}
 	}
 
 	logger.StreamStart(chapterIdx)
@@ -811,7 +945,7 @@ func PolishChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 		return fmt.Errorf("润色失败: %w", err)
 	}
 
-	ch.Content = result
+	ch.Content = stripChapterMetaProse(result, cfg.Language)
 	ch.Status = StatusReview
 
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)

@@ -276,6 +276,18 @@ var errorCatalog = map[string]map[string]string{
 		LangZH: "章节内容为空，无法润色",
 		LangEN: "Chapter content is empty; cannot polish",
 	},
+	"chapter_edit_op_required": {
+		LangZH: "缺少 operation 参数，必须为 replace_lines / replace_text / insert_after_line / append 之一",
+		LangEN: "Missing operation parameter; must be one of: replace_lines / replace_text / insert_after_line / append",
+	},
+	"chapter_edit_text_required": {
+		LangZH: "new_text 不能为空",
+		LangEN: "new_text must not be empty",
+	},
+	"chapter_edit_failed": {
+		LangZH: "章节编辑失败: %s",
+		LangEN: "Chapter edit failed: %s",
+	},
 	"chapter_in_writing": {
 		LangZH: "章节正在写作中，无法润色",
 		LangEN: "Chapter is being written; cannot polish",
@@ -336,6 +348,26 @@ var errorCatalog = map[string]map[string]string{
 		LangZH: "此功能已移至 LLM 对话中，请通过聊天让 AI 帮你润色",
 		LangEN: "This action has moved into the LLM chat; ask the assistant to polish for you",
 	},
+	"writing_conflict_none": {
+		LangZH: "当前没有待处理的写作冲突",
+		LangEN: "No pending writing conflict to resolve",
+	},
+	"missing_action": {
+		LangZH: "缺少 action 字段",
+		LangEN: "action field is required",
+	},
+	"invalid_conflict_chapter_idx": {
+		LangZH: "冲突章节索引无效",
+		LangEN: "Invalid conflict chapter index",
+	},
+	"unsupported_action": {
+		LangZH: "不支持的 action: %s",
+		LangEN: "Unsupported action: %s",
+	},
+	"no_foreshadows_to_check": {
+		LangZH: "当前没有伏笔，无需检查",
+		LangEN: "No foreshadows to check",
+	},
 }
 
 // systemPrompts maps a stable AI-system-prompt key to per-language text.
@@ -370,6 +402,14 @@ var systemPrompts = map[string]map[string]string{
 		LangZH: "你是一位严谨的小说伏笔追踪员。请严格按照要求的JSON格式输出，不要添加任何额外文字或markdown代码块标记。",
 		LangEN: "You are a strict novel foreshadow tracker. Output strict JSON exactly as requested — no extra prose, no markdown code fences.",
 	},
+	"foreshadow_outline_checker_json": {
+		LangZH: "你是一位严谨的小说叙事一致性编辑。请严格按照要求的JSON格式输出，不要添加任何额外文字。拿不准时视为无冲突。",
+		LangEN: "You are a strict narrative-consistency editor. Output strict JSON exactly as requested — no extra prose. When unsure, treat as no conflict.",
+	},
+	"writing_conflict_analyst_json": {
+		LangZH: "你是一位资深小说编辑，擅长诊断大纲、伏笔与前情之间的矛盾。请严格按照要求的JSON格式输出，不要添加任何额外文字。",
+		LangEN: "You are a senior novel editor who diagnoses contradictions among outlines, foreshadows, and prior story. Output strict JSON exactly as requested — no extra prose.",
+	},
 	"consistency_reviewer_json": {
 		LangZH: "你是一位专业的小说一致性审查编辑。请严格按照要求的JSON格式输出，不要添加任何额外文字或markdown代码块标记。",
 		LangEN: "You are a professional novel-consistency reviewer. Output strict JSON exactly as requested — no extra prose, no markdown code fences.",
@@ -383,8 +423,8 @@ var systemPrompts = map[string]map[string]string{
 		LangEN: "You are a senior novel editor specialising in chapter-to-chapter transitions. Follow the output instructions strictly.",
 	},
 	"polish_editor": {
-		LangZH: "你是一位专业的中文小说润色编辑。请严格按照规则修改文本，输出修改后的完整章节正文。不要添加任何解释或标记。",
-		LangEN: "You are a professional novel-polish editor. Apply the rules strictly and output the full revised chapter prose. No explanation, no markers.",
+		LangZH: "你是一位专业的中文小说润色编辑。请严格按照规则修改文本，输出修改后的完整章节正文。不要添加章节标题、章节号、「本章完」等任何解释、标记或元信息。",
+		LangEN: "You are a professional novel-polish editor. Apply the rules strictly and output the full revised chapter prose. No chapter titles, numbers, meta lines like \"End of chapter\", explanations, or markers.",
 	},
 	"book_diagnosis": {
 		LangZH: "你是一位资深网文总编辑，擅长长篇完稿后的通读审阅。请严格按要求输出诊断报告，不要改写正文。",
@@ -399,12 +439,12 @@ var systemPrompts = map[string]map[string]string{
 		LangEN: "You are a senior novel editor. Produce an executable revision-roadmap JSON from the reports — do not output rewritten prose.",
 	},
 	"author_default": {
-		LangZH: "你是一位小说作者。",
-		LangEN: "You are a novelist.",
+		LangZH: "你是一位小说作者。只输出小说正文，不要输出章节标题、章节号、作者说明或「本章完」等元信息。严格保持用户指定的叙述视角统一。",
+		LangEN: "You are a novelist. Output story prose only — no chapter titles, numbers, author notes, or meta lines like \"End of chapter\". Keep the specified narrative POV consistent throughout.",
 	},
 	"chapter_revision_suffix": {
-		LangZH: "\n你正在执行章节修订任务：只做修改意见要求的改动，其余原文保持不变，输出修改后的完整正文。",
-		LangEN: "\nYou are performing a chapter revision: make only the changes the feedback requires; leave everything else identical; output the full revised prose.",
+		LangZH: "\n你正在执行章节修订任务：只做修改意见要求的改动，其余原文保持不变，输出修改后的完整正文；不要添加任何元信息或说明性文字。",
+		LangEN: "\nYou are performing a chapter revision: make only the changes the feedback requires; leave everything else identical; output the full revised prose with no meta or explanatory text.",
 	},
 }
 
@@ -421,24 +461,45 @@ func SystemPromptFor(lang, key string) string {
 	return entry[LangZH]
 }
 
+func lookupCatalog(lang, key string) (string, bool) {
+	lang = NormalizeLanguage(lang)
+	for _, catalog := range []map[string]map[string]string{messageCatalog, errorCatalog} {
+		entry, ok := catalog[key]
+		if !ok {
+			continue
+		}
+		tpl := entry[lang]
+		if tpl == "" {
+			tpl = entry[LangZH]
+		}
+		if tpl != "" {
+			return tpl, true
+		}
+	}
+	return "", false
+}
+
 // T returns a localized message for the given key and args; falls back to zh, then key.
 func T(lang, key string, args ...any) string {
-	lang = NormalizeLanguage(lang)
-	entry, ok := errorCatalog[key]
+	tpl, ok := lookupCatalog(lang, key)
 	if !ok {
-		return key
-	}
-	tpl := entry[lang]
-	if tpl == "" {
-		tpl = entry[LangZH]
-	}
-	if tpl == "" {
 		return key
 	}
 	if len(args) == 0 {
 		return tpl
 	}
 	return fmt.Sprintf(tpl, args...)
+}
+
+func msgArgsToStrings(args ...any) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = fmt.Sprint(a)
+	}
+	return out
 }
 
 // writeErrorReq writes a JSON error response, picking message language from the request.

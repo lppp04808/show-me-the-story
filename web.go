@@ -21,8 +21,8 @@ import (
 //go:embed frontend/dist
 var staticFiles embed.FS
 
-func startWebServer(apiCfg *APIConfig, apiCfgPath string, cfg *Config, state *Progress, settings *ProjectSettings, skills []Skill, sessionsDir string, logger *LogBroadcaster, port string, progDir string) {
-	h := NewHandlers(apiCfg, apiCfgPath, logger, progDir)
+func startWebServer(apiCfg *APIConfig, apiCfgPath string, cfg *Config, state *Progress, settings *ProjectSettings, skills []Skill, sessionsDir string, logger *LogBroadcaster, port string, progDir string, version string) {
+	h := NewHandlers(apiCfg, apiCfgPath, logger, progDir, version)
 
 	mux := http.NewServeMux()
 
@@ -32,6 +32,9 @@ func startWebServer(apiCfg *APIConfig, apiCfgPath string, cfg *Config, state *Pr
 	mux.HandleFunc("GET /api/projects/current", h.GetProjectCurrent)
 	mux.HandleFunc("POST /api/projects/select", h.PostProjectSelect)
 	mux.HandleFunc("DELETE /api/projects/{name}", h.DeleteProject)
+
+	// Version endpoint (global, always available)
+	mux.HandleFunc("GET /api/version", h.GetVersion)
 
 	// API config (global, always available)
 	mux.HandleFunc("GET /api/config/api", h.GetAPIConfig)
@@ -52,7 +55,11 @@ func startWebServer(apiCfg *APIConfig, apiCfgPath string, cfg *Config, state *Pr
 	mux.HandleFunc("PUT /api/outline/{num}", h.PutChapterOutline)
 
 	mux.HandleFunc("POST /api/chapter/generate", h.PostChapterGenerate)
+	mux.HandleFunc("GET /api/chapter/conflict", h.GetChapterConflict)
+	mux.HandleFunc("POST /api/chapter/conflict-resolve", h.PostChapterConflictResolve)
+	mux.HandleFunc("POST /api/foreshadows/outline-check", h.PostForeshadowOutlineCheck)
 	mux.HandleFunc("POST /api/chapter/confirm", h.PostChapterConfirm)
+	mux.HandleFunc("POST /api/chapter/edit", h.PostChapterEdit)
 	mux.HandleFunc("POST /api/chapter/revise", h.PostChapterRevise)
 	mux.HandleFunc("POST /api/chapter/revise/{num}", h.PostChapterReviseSpecific)
 	mux.HandleFunc("POST /api/chapter/polish", h.PostChapterPolish)
@@ -269,10 +276,7 @@ func (h *Handlers) PostProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logger.InfoBilingual(
-		fmt.Sprintf("项目「%s」创建成功", name),
-		fmt.Sprintf("Project \"%s\" created", name),
-	)
+	h.logger.InfoKey("log.project_created", name)
 	h.writeJSON(w, http.StatusOK, map[string]string{"name": name, "language": lang})
 }
 
@@ -288,7 +292,7 @@ func (h *Handlers) GetProjectCurrent(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) PostProjectSelect(w http.ResponseWriter, r *http.Request) {
 	if h.isTaskRunning() {
-		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
 		return
 	}
 
@@ -296,12 +300,12 @@ func (h *Handlers) PostProjectSelect(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		h.writeError(w, http.StatusBadRequest, "缺少项目名称")
+		h.writeErrorReq(w, r, http.StatusBadRequest, "missing_project_name")
 		return
 	}
 
 	if err := h.switchProject(req.Name); err != nil {
-		h.writeError(w, http.StatusBadRequest, err.Error())
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
 
@@ -310,13 +314,13 @@ func (h *Handlers) PostProjectSelect(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	if h.isTaskRunning() {
-		h.writeError(w, http.StatusConflict, "有任务正在运行，无法删除项目")
+		h.writeErrorReq(w, r, http.StatusConflict, "delete_project_locked")
 		return
 	}
 
 	name := r.PathValue("name")
 	if name == "" {
-		h.writeError(w, http.StatusBadRequest, "缺少项目名称")
+		h.writeErrorReq(w, r, http.StatusBadRequest, "missing_project_name")
 		return
 	}
 
@@ -325,22 +329,22 @@ func (h *Handlers) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	h.projectMu.RUnlock()
 
 	if name == currentProject {
-		h.writeError(w, http.StatusConflict, "不能删除当前正在使用的项目")
+		h.writeErrorReq(w, r, http.StatusConflict, "cannot_delete_current_project")
 		return
 	}
 
 	projectDir := filepath.Join(h.storysDir(), name)
 	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
-		h.writeError(w, http.StatusNotFound, "项目不存在")
+		h.writeErrorReq(w, r, http.StatusNotFound, "project_not_found")
 		return
 	}
 
 	if err := os.RemoveAll(projectDir); err != nil {
-		h.writeError(w, http.StatusInternalServerError, "删除项目失败: "+err.Error())
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "delete_project_failed", err.Error())
 		return
 	}
 
-	h.logger.Info(fmt.Sprintf("项目「%s」已删除", name))
+	h.logger.InfoKey("log.project_deleted", name)
 	h.writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

@@ -10,6 +10,7 @@ type APIConfig struct {
 	APIKey               string `json:"api_key"`
 	BaseURL              string `json:"base_url"`
 	Model                string `json:"model"`
+	MaxTokens            int    `json:"max_tokens,omitempty"`           // 0 = 模型默认；Agent 调用建议 ≥ 8192
 	HTTPTimeoutSeconds   int    `json:"http_timeout_seconds"`
 	ContextBudgetTokens  int    `json:"context_budget_tokens"` // 全书优化上下文预算，默认 900000
 }
@@ -42,6 +43,7 @@ type StoryConfig struct {
 	ChapterCount          int    `json:"chapter_count"`
 	TargetWordsPerChapter int    `json:"target_words_per_chapter"`
 	WritingStyle          string `json:"writing_style"`
+	WritingPOV            string `json:"writing_pov"` // 叙述视角，如第一人称女主、第三人称限知等
 	StorySynopsis         string `json:"story_synopsis"`
 }
 
@@ -59,6 +61,8 @@ type PromptsConfig struct {
 	SettingsReconciliation        string `json:"settings_reconciliation"`
 	TransitionSmoothing           string `json:"transition_smoothing"`
 	OutlineConsistencyCheck       string `json:"outline_consistency_check"`
+	ForeshadowOutlineConsistency  string `json:"foreshadow_outline_consistency"`
+	WritingConflictAnalysis       string `json:"writing_conflict_analysis"`
 	BookDiagnosis                 string `json:"book_diagnosis"`
 	BookConsistencyCheck          string `json:"book_consistency_check"`
 	BookRoadmap                   string `json:"book_roadmap"`
@@ -113,7 +117,12 @@ func LoadAPIConfig(path string) (*APIConfig, error) {
 		cfg.HTTPTimeoutSeconds = 300
 	}
 	if cfg.ContextBudgetTokens <= 0 {
-		cfg.ContextBudgetTokens = defaultContextBudgetTokens
+		// 先尝试从 API 获取模型的上下文窗口
+		if window := FetchModelContextWindow(&cfg); window > 0 {
+			cfg.ContextBudgetTokens = window
+		} else {
+			cfg.ContextBudgetTokens = defaultContextBudgetTokens
+		}
 	}
 
 	return &cfg, nil
@@ -153,7 +162,14 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	cfg.Language = NormalizeLanguage(cfg.Language)
+
+	// 保存 applyDefaults 前的 prompts 状态，用于判断是否有字段被填充
+	oldPrompts := cfg.Prompts
 	cfg.Prompts.applyDefaults(cfg.Language)
+	// 如果有字段被填充（从空变为默认值），写回磁盘
+	if cfg.Prompts != oldPrompts {
+		saveConfig(path, &cfg)
+	}
 
 	if cfg.SkillConfig == nil {
 		cfg.SkillConfig = &SkillConfig{
@@ -217,6 +233,12 @@ func (p *PromptsConfig) applyDefaults(lang string) {
 	}
 	if p.OutlineConsistencyCheck == "" {
 		p.OutlineConsistencyCheck = defaults.OutlineConsistencyCheck
+	}
+	if p.ForeshadowOutlineConsistency == "" {
+		p.ForeshadowOutlineConsistency = defaults.ForeshadowOutlineConsistency
+	}
+	if p.WritingConflictAnalysis == "" {
+		p.WritingConflictAnalysis = defaults.WritingConflictAnalysis
 	}
 	if p.BookDiagnosis == "" {
 		p.BookDiagnosis = defaults.BookDiagnosis

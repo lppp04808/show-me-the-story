@@ -1,12 +1,13 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { progress, taskRunning, streamingContent, streamingChapterIdx, streamCharCount, selectedChapter, autoConfirm, addToast, confirmModal } from '../lib/stores.js';
+  import { progress, taskRunning, streamingContent, streamingChapterIdx, selectedChapter, autoConfirm, addToast, confirmModal, currentPage } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
   import PostProcessPanel from '../components/PostProcessPanel.svelte';
+  import TaskTokenBadge from '../components/TaskTokenBadge.svelte';
 
   // 保留 prop 以兼容 App 传参
-  export let sendToChat = async () => {};
+  export const sendToChat = async () => {};
 
   onMount(async () => {
     try {
@@ -54,8 +55,8 @@
   $: isStreamingThis = $streamingChapterIdx === $selectedChapter && $streamingContent;
   // 流式期间 $streamingContent 只含尾部窗口（性能保护），全文在生成结束后由 progress 拉取
   $: displayContent = isStreamingThis ? $streamingContent : (ch?.content || '');
-  // 流式期间不对全文做正则统计，直接用 SSE 累计的字数
-  $: wordCount = isStreamingThis ? $streamCharCount : (ch?.content ? ch.content.replace(/\s/g, '').length : 0);
+  $: chapterWordCount = ch?.content ? ch.content.replace(/\s/g, '').length : 0;
+  $: showTaskTokens = $taskRunning && isCurrent;
   $: totalWords = chapters.reduce((sum, c) => sum + (c.content ? c.content.replace(/\s/g, '').length : 0), 0);
 
   $: foreshadows = p?.foreshadows || [];
@@ -64,6 +65,31 @@
   $: fsNearTarget = fsActive.filter(f =>
     f.target_chapter > 0 && (currentIdx + 1) >= f.target_chapter - 2 && (currentIdx + 1) <= f.target_chapter
   );
+  $: writingConflict = p?.pending_writing_conflict || null;
+
+  async function resolveWritingConflict(action) {
+    if ($taskRunning) return;
+    try {
+      const res = await api('POST', '/api/chapter/conflict-resolve', { action });
+      if (action === 'retry') {
+        progress.set(await api('GET', '/api/progress'));
+        await api('POST', '/api/chapter/generate');
+        addToast($t('writing.toasts.generateStarted', { num: writingConflict?.chapter_num }), 'info');
+        return;
+      }
+      progress.set(res);
+      if (action === 'force_review') {
+        addToast($t('writing.conflict.forceReview'), 'success');
+      }
+    } catch (e) {
+      addToast(e.message, 'error');
+    }
+  }
+
+  function gotoPage(page) {
+    currentPage.set(page);
+    window.location.hash = '#' + page;
+  }
 
   $: statusMeta = {
     pending:  { label: $t('writing.status.pending'),  cls: 'badge-ghost',   dot: 'bg-base-content/20' },
@@ -212,6 +238,39 @@
       </div>
     </div>
 
+    {#if writingConflict}
+      <div class="card bg-error/10 border border-error/30 shadow-sm">
+        <div class="card-body p-4 gap-3">
+          <h3 class="font-semibold text-error">{$t('writing.conflict.title')}</h3>
+          <p class="text-sm">{$t('writing.conflict.summary')}：{writingConflict.summary}</p>
+          {#if writingConflict.issues?.length}
+            <div class="text-xs text-base-content/70">
+              <div class="font-medium mb-1">{$t('writing.conflict.issues')}</div>
+              <ul class="list-disc list-inside space-y-0.5">
+                {#each writingConflict.issues as issue}
+                  <li>{issue}</li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+          <div class="flex flex-wrap gap-2">
+            {#each (writingConflict.suggested_actions || []) as action}
+              {#if action.id === 'edit_outline'}
+                <button class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={() => gotoPage('outline')}>{$t('writing.conflict.gotoOutline')}</button>
+              {:else if action.id === 'adjust_foreshadow'}
+                <button class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={() => gotoPage('foreshadows')}>{$t('writing.conflict.gotoForeshadows')}</button>
+              {:else if action.id === 'retry'}
+                <button class="btn btn-primary btn-xs" disabled={$taskRunning} on:click={() => resolveWritingConflict('retry')}>{$t('writing.conflict.retry')}</button>
+              {:else if action.id === 'force_review'}
+                <button class="btn btn-ghost btn-xs" disabled={$taskRunning} on:click={() => resolveWritingConflict('force_review')}>{$t('writing.conflict.forceReview')}</button>
+              {/if}
+            {/each}
+            <button class="btn btn-ghost btn-xs" disabled={$taskRunning} on:click={() => resolveWritingConflict('dismiss')}>{$t('writing.conflict.dismiss')}</button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
     {#if foreshadows.length > 0}
       <div class="card bg-base-200 shadow-sm">
         <div class="card-body p-4 gap-2">
@@ -275,8 +334,10 @@
               <div class="flex items-center gap-2 flex-wrap">
                 <h2 class="card-title text-base flex-1 min-w-0">{$t('writing.chapter.title', { num: ch.num, title: ch.title })}</h2>
                 <span class="badge badge-sm {statusMeta[ch.status]?.cls || 'badge-ghost'}">{statusMeta[ch.status]?.label || ch.status}</span>
-                {#if wordCount > 0}
-                  <span class="text-xs text-base-content/40">{$t('writing.chapter.words', { n: wordCount.toLocaleString() })}</span>
+                {#if showTaskTokens}
+                  <TaskTokenBadge className="text-xs text-base-content/40 font-mono" />
+                {:else if chapterWordCount > 0}
+                  <span class="text-xs text-base-content/40">{$t('writing.chapter.words', { n: chapterWordCount.toLocaleString() })}</span>
                 {/if}
               </div>
 

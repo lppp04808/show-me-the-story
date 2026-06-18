@@ -13,9 +13,21 @@ import (
 )
 
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []Message      `json:"messages"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	MaxTokens     int            `json:"max_tokens,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+type tokenUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 type Message struct {
@@ -27,6 +39,7 @@ type ChatResponse struct {
 	Choices []struct {
 		Message Message `json:"message"`
 	} `json:"choices"`
+	Usage *tokenUsage `json:"usage,omitempty"`
 }
 
 func normalizeURL(base string) string {
@@ -40,6 +53,52 @@ func normalizeURL(base string) string {
 	}
 
 	return base + "/chat/completions"
+}
+
+// FetchModelContextWindow 从 API 的 /models 端点获取指定模型的上下文窗口大小。
+// 成功返回 context_window > 0，失败返回 0（调用方应使用默认值）。
+func FetchModelContextWindow(apiCfg *APIConfig) int {
+	if apiCfg == nil || strings.TrimSpace(apiCfg.BaseURL) == "" || strings.TrimSpace(apiCfg.Model) == "" {
+		return 0
+	}
+	base := strings.TrimSpace(apiCfg.BaseURL)
+	base = strings.TrimSuffix(base, "/")
+	if !strings.HasSuffix(base, "/v1") && !strings.Contains(base, "/v1/") {
+		if !strings.Contains(base, "11434") {
+			base = base + "/v1"
+		}
+	}
+	modelsURL := base + "/models/" + apiCfg.Model
+
+	req, err := http.NewRequest("GET", modelsURL, nil)
+	if err != nil {
+		return 0
+	}
+	if apiCfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiCfg.APIKey)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return 0
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0
+	}
+
+	var result struct {
+		ContextWindow int `json:"context_window"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil || result.ContextWindow <= 0 {
+		return 0
+	}
+	return result.ContextWindow
 }
 
 func validateAPIConfig(apiCfg *APIConfig) error {
@@ -81,13 +140,39 @@ func CallAPI(ctx context.Context, apiCfg *APIConfig, system, user string) (strin
 	})
 }
 
-// CallAPIMessages 以完整的多轮消息数组调用 API（非流式）。
+// CallAPIMessages 以完整的多轮消息数组调用 API。
+// 内部优先走流式并缓冲全文，使 token 计数在等待期间也能更新；流式不可用时回退同步请求。
 func CallAPIMessages(ctx context.Context, apiCfg *APIConfig, messages []Message) (string, error) {
+	result, err := CallAPIStreamMessages(ctx, apiCfg, messages, nil)
+	if err == nil && result != "" {
+		return result, nil
+	}
+	if ctx.Err() != nil {
+		if result != "" {
+			return result, ctx.Err()
+		}
+		return "", ctx.Err()
+	}
+	if result != "" {
+		return result, err
+	}
+	if err != nil && isFatalAPIError(err) {
+		return "", err
+	}
+	// ponytail: fallback for providers with broken stream; loses in-flight stream estimate only.
+	return callAPIMessagesSync(ctx, apiCfg, messages)
+}
+
+// callAPIMessagesSync 同步 HTTP 调用（仅作流式失败时的回退）。
+func callAPIMessagesSync(ctx context.Context, apiCfg *APIConfig, messages []Message) (string, error) {
 	fullURL := normalizeURL(apiCfg.BaseURL)
+	tracker := taskTokensFromContext(ctx)
+	tracker.beginCall(messages)
 
 	reqBody := ChatRequest{
-		Model:    apiCfg.Model,
-		Messages: messages,
+		Model:     apiCfg.Model,
+		Messages:  messages,
+		MaxTokens: apiCfg.MaxTokens,
 	}
 
 	bts, err := json.Marshal(reqBody)
@@ -128,7 +213,15 @@ func CallAPIMessages(ctx context.Context, apiCfg *APIConfig, messages []Message)
 	}
 
 	if len(chatResp.Choices) > 0 {
-		return chatResp.Choices[0].Message.Content, nil
+		content := chatResp.Choices[0].Message.Content
+		if tracker != nil {
+			if chatResp.Usage != nil {
+				tracker.finishCall(chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, true, messages, content)
+			} else {
+				tracker.finishCall(0, 0, false, messages, content)
+			}
+		}
+		return content, nil
 	}
 	return "", fmt.Errorf("接口未响应有效 Choices 文本")
 }
@@ -170,13 +263,13 @@ func CallAPIWithRetryLog(ctx context.Context, apiCfg *APIConfig, system, user st
 			return result
 		}
 		if isFatalAPIError(err) {
-			logger.Error(fmt.Sprintf("致命错误: %v，不再重试", err))
+			logger.ErrorKey("log.fatal_no_retry", err)
 			return ""
 		}
 
 		retryCount++
 		waitTime := getWaitTime(retryCount)
-		logger.Warn(fmt.Sprintf("API调用失败: %v。第 %d 次重试，等待 %ds...", err, retryCount, waitTime))
+		logger.WarnKey("log.api_retry", err, retryCount, waitTime)
 		select {
 		case <-time.After(time.Duration(waitTime) * time.Second):
 		case <-ctx.Done():
@@ -198,6 +291,7 @@ type streamDelta struct {
 			Content string `json:"content"`
 		} `json:"delta"`
 	} `json:"choices"`
+	Usage *tokenUsage `json:"usage,omitempty"`
 }
 
 func CallAPIStream(ctx context.Context, apiCfg *APIConfig, system, user string, onChunk func(string)) (string, error) {
@@ -210,11 +304,15 @@ func CallAPIStream(ctx context.Context, apiCfg *APIConfig, system, user string, 
 // CallAPIStreamMessages 以完整的多轮消息数组调用 API（流式）。
 func CallAPIStreamMessages(ctx context.Context, apiCfg *APIConfig, messages []Message, onChunk func(string)) (string, error) {
 	fullURL := normalizeURL(apiCfg.BaseURL)
+	tracker := taskTokensFromContext(ctx)
+	tracker.beginCall(messages)
 
 	reqBody := ChatRequest{
 		Model:    apiCfg.Model,
 		Messages: messages,
 		Stream:   true,
+		StreamOptions: &streamOptions{IncludeUsage: true},
+		MaxTokens: apiCfg.MaxTokens,
 	}
 
 	bts, err := json.Marshal(reqBody)
@@ -247,6 +345,7 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *APIConfig, messages []Me
 
 	var fullContent strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
+	var streamUsage *tokenUsage
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
@@ -265,9 +364,15 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *APIConfig, messages []Me
 		if err := json.Unmarshal([]byte(data), &delta); err != nil {
 			continue
 		}
+		if delta.Usage != nil {
+			streamUsage = delta.Usage
+		}
 		if len(delta.Choices) > 0 && delta.Choices[0].Delta.Content != "" {
 			chunk := delta.Choices[0].Delta.Content
 			fullContent.WriteString(chunk)
+			if tracker != nil {
+				tracker.updateStreamContent(fullContent.String())
+			}
 			if onChunk != nil {
 				onChunk(chunk)
 			}
@@ -277,6 +382,13 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *APIConfig, messages []Me
 	result := fullContent.String()
 	if result == "" {
 		return "", fmt.Errorf("流式响应为空")
+	}
+	if tracker != nil {
+		if streamUsage != nil {
+			tracker.finishCall(streamUsage.PromptTokens, streamUsage.CompletionTokens, true, messages, result)
+		} else {
+			tracker.finishCall(0, 0, false, messages, result)
+		}
 	}
 	return result, nil
 }
@@ -318,13 +430,13 @@ func CallAPIStreamWithRetryLog(ctx context.Context, apiCfg *APIConfig, system, u
 			return result
 		}
 		if isFatalAPIError(err) {
-			logger.Error(fmt.Sprintf("致命错误: %v，不再重试", err))
+			logger.ErrorKey("log.fatal_no_retry", err)
 			return ""
 		}
 
 		retryCount++
 		waitTime := getWaitTime(retryCount)
-		logger.Warn(fmt.Sprintf("流式API调用失败: %v。第 %d 次重试，等待 %ds...", err, retryCount, waitTime))
+		logger.WarnKey("log.api_stream_retry", err, retryCount, waitTime)
 		select {
 		case <-time.After(time.Duration(waitTime) * time.Second):
 		case <-ctx.Done():

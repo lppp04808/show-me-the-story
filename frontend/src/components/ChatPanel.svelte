@@ -2,8 +2,9 @@
   import { onMount, afterUpdate } from 'svelte';
   import { api } from '../lib/api.js';
   import { renderMarkdown } from '../lib/markdown.js';
-  import { chatSessions, currentChatSession, addToast, showConfirm, taskRunning, lastFailedTask, logEntries, currentTaskName, streamCharCount } from '../lib/stores.js';
-  import { t, uiLocale } from '../lib/i18n/index.js';
+  import { chatSessions, currentChatSession, addToast, showConfirm, taskRunning, lastFailedTask, logEntries, currentTaskName } from '../lib/stores.js';
+  import { t, uiLocale, formatToolResult } from '../lib/i18n/index.js';
+  import TaskTokenBadge from './TaskTokenBadge.svelte';
 
   export let contextPage = 'config';
 
@@ -27,6 +28,9 @@
     const key = 'chat.toolNames.' + name;
     const label = $t(key);
     return label === key ? name : label;
+  }
+  function toolResultText(msg, key, args) {
+    return formatToolResult(msg, key, args, $uiLocale);
   }
   function fmtArgs(args) {
     const s = typeof args === 'string' ? args : JSON.stringify(args);
@@ -110,7 +114,7 @@
     autoScroll = nearBottom;
   }
 
-  // 滚动守卫：afterUpdate 在任何 store 变化（如 streamCharCount 每 150ms 跳动、
+  // 滚动守卫：afterUpdate 在任何 store 变化（如 token 计数、
   // 日志追加）后都会触发，无条件写 scrollTop 会造成高频强制重排。
   // 仅在消息区内容实际变化时才滚动。
   let lastScrollKey = '';
@@ -237,8 +241,15 @@
 <div class="flex flex-col h-full">
   <!-- 会话栏 -->
   <div class="border-b border-base-content/10 px-3 py-2 flex items-center gap-2 shrink-0">
-    <button class="btn btn-ghost btn-xs" on:click={() => showSessionList = !showSessionList}>
-      {showSessionList ? $t('chat.session.collapse') : $t('chat.session.menu')}
+    <button
+      class="btn btn-sm gap-1 border border-base-content/20 hover:border-primary/50 hover:bg-base-300 transition-colors"
+      class:border-primary={showSessionList}
+      class:bg-base-300={showSessionList}
+      on:click={() => showSessionList = !showSessionList}
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+      {$t('chat.session.menu')}
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 transition-transform" class:rotate-180={showSessionList} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
     </button>
     <span class="text-sm text-base-content/50 truncate flex-1">
       {$currentChatSession?.title || $t('chat.session.placeholder')}
@@ -284,8 +295,8 @@
           <span class="text-success text-xs">●</span>
         {/if}
         <span class="text-xs font-semibold text-base-content/70">{$currentTaskName || $t('chat.task.placeholder')}{$taskRunning ? $t('chat.task.running') : $t('chat.task.ended')}</span>
-        {#if $taskRunning && $streamCharCount > 0}
-          <span class="badge badge-xs badge-info gap-1 font-mono">{$t('chat.task.wordCount', { n: $streamCharCount.toLocaleString() })}</span>
+        {#if $taskRunning}
+          <TaskTokenBadge />
         {/if}
         <span class="text-xs text-base-content/40 ml-auto">{taskStatusCollapsed ? $t('chat.task.expand') : $t('chat.task.collapse')}</span>
       </div>
@@ -348,14 +359,16 @@
             {:else}
               {#each parseContentSegments(m.content) as seg}
                 {#if seg.type === 'tool_call'}
-                  <div class="chat chat-start">
-                    <div class="chat-bubble bg-base-300 text-xs font-mono max-w-[85%]">
-                      <div class="text-warning font-semibold mb-0.5">🔧 {toolLabel(seg.name)}</div>
-                      {#if fmtArgs(seg.args)}
-                        <div class="text-base-content/50 break-all">{fmtArgs(seg.args)}</div>
-                      {/if}
+                  {#if !m.tool_calls?.length}
+                    <div class="chat chat-start">
+                      <div class="chat-bubble bg-base-300 text-xs font-mono max-w-[85%]">
+                        <div class="text-warning font-semibold mb-0.5">🔧 {toolLabel(seg.name)}</div>
+                        {#if fmtArgs(seg.args)}
+                          <div class="text-base-content/50 break-all">{fmtArgs(seg.args)}</div>
+                        {/if}
+                      </div>
                     </div>
-                  </div>
+                  {/if}
                 {:else if seg.content.trim()}
                   <div class="chat chat-start">
                     <div class="chat-bubble bg-base-300 text-sm max-w-[85%] md-body">{@html renderMarkdown(seg.content.trim())}</div>
@@ -369,7 +382,7 @@
             <div class="chat-bubble bg-base-300/60 text-xs font-mono max-w-[85%]">
               <details>
                 <summary class="text-info font-semibold cursor-pointer select-none">{$t('chat.tool.result')}</summary>
-                <div class="text-base-content/50 break-all mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap">{m.tool_result || ''}</div>
+                <div class="text-base-content/50 break-all mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap">{toolResultText(m.tool_result, m.tool_result_key, m.tool_result_args)}</div>
               </details>
             </div>
           </div>
@@ -385,7 +398,7 @@
             {:else}
               <div class="text-success font-semibold mb-0.5">✅ {toolLabel(tc.name)}</div>
               {#if tc.result}
-                <div class="text-base-content/50 break-all max-h-20 overflow-y-auto">{tc.result.length > 200 ? tc.result.slice(0, 200) + '...' : tc.result}</div>
+                <div class="text-base-content/50 break-all max-h-20 overflow-y-auto">{tc.result ? (tc.result.length > 200 ? tc.result.slice(0, 200) + '...' : tc.result) : ''}</div>
               {/if}
             {/if}
           </div>

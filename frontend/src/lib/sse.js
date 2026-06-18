@@ -1,17 +1,16 @@
-import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, streamCharCount, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions } from './stores.js';
+import { get } from 'svelte/store';
+import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, taskTokenUsage, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions } from './stores.js';
 import { api } from './api.js';
-import { getLocale, translate, translateServerMessage } from './i18n/index.js';
+import { getLocale, translate, formatLogEntry, formatToolResult } from './i18n/index.js';
 
 let eventSource = null;
 let reconnectTimer = null;
+let tokenPollTimer = null;
+let taskCount = 0;
 
 // —— 流式输出节流缓冲 + 尾部窗口 ——
-// 节流只能降低更新频率，但若 store 中保存完整流式全文，每次刷新仍要对全文
-// 重新渲染/排版（成本随长度线性增长，总成本 O(n²)），长章节会把主线程占满
-// 直至页面无响应。因此完整文本只存模块级变量，store 仅保留尾部窗口，
-// 每次刷新渲染成本恒定 O(1)。生成结束后由 progress 重新拉取展示全文。
 const FLUSH_INTERVAL = 150;
-const TAIL_MAX = 3000; // store 中保留的尾部窗口字符数
+const TAIL_MAX = 3000;
 
 let contentBuf = '';
 let contentFull = '';
@@ -26,7 +25,6 @@ function flushContentBuf() {
   contentFull += text;
   streamingChapterIdx.set(contentIdx);
   streamingContent.set(contentFull.length > TAIL_MAX ? contentFull.slice(-TAIL_MAX) : contentFull);
-  streamCharCount.update(n => n + Array.from(text).length);
 }
 
 function resetContentStream(idx) {
@@ -36,12 +34,8 @@ function resetContentStream(idx) {
   contentIdx = idx;
   streamingChapterIdx.set(idx);
   streamingContent.set('');
-  streamCharCount.set(0);
 }
 
-// —— progress 拉取去抖 ——
-// progress_update 事件可能在短时间内连发，而 /api/progress 返回含全书正文的
-// 大 JSON，每次都拉取会造成解析 + 整页重渲染的尖峰。这里 500ms 内合并为一次。
 let progressFetchTimer = null;
 
 function refreshProgress(immediate = false) {
@@ -57,6 +51,23 @@ function refreshProgress(immediate = false) {
   }, 500);
 }
 
+function refreshTokenUsage() {
+  if (!get(taskRunning)) return;
+  api('GET', '/api/status').then(s => {
+    if (s?.token_usage) taskTokenUsage.set(s.token_usage);
+  }).catch(() => {});
+}
+
+function startTokenPoll() {
+  stopTokenPoll();
+  refreshTokenUsage();
+  tokenPollTimer = setInterval(refreshTokenUsage, 2000);
+}
+
+function stopTokenPoll() {
+  if (tokenPollTimer) { clearInterval(tokenPollTimer); tokenPollTimer = null; }
+}
+
 let chatBuf = '';
 let chatSessionId = null;
 let chatTimer = null;
@@ -67,7 +78,6 @@ function flushChatBuf() {
   const text = chatBuf;
   const sid = chatSessionId;
   chatBuf = '';
-  streamCharCount.update(n => n + Array.from(text).length);
   currentChatSession.update(s => {
     if (!s || s.id !== sid) return s;
     return { ...s, streaming_text: (s.streaming_text || '') + text };
@@ -86,11 +96,7 @@ export function connectSSE() {
 
   eventSource.addEventListener('log', e => {
     const d = JSON.parse(e.data);
-    // Prefer the server-supplied English text when UI is English; otherwise
-    // try the client-side dictionary; fall back to the Chinese original.
-    if (locale === 'en') {
-      d.msg = d.msg_en || translateServerMessage(d.msg, 'en');
-    }
+    d.msg = formatLogEntry(d, locale);
     addLog(d);
   });
 
@@ -104,29 +110,44 @@ export function connectSSE() {
 
   eventSource.addEventListener('task_start', e => {
     const d = JSON.parse(e.data);
+    taskCount++;
     taskRunning.set(true);
     resetContentStream(-1);
     clearChatBuf();
-    streamCharCount.set(0);
+    taskTokenUsage.set(null);
     currentTaskName.set(taskLabel(d.task));
     logEntries.set([]);
     lastFailedTask.set(null);
+    startTokenPoll();
   });
 
   eventSource.addEventListener('task_end', e => {
     const d = JSON.parse(e.data);
-    taskRunning.set(false);
-    resetContentStream(-1);
-    clearChatBuf();
-    streamCharCount.set(0);
-    currentTaskName.set(null);
+    taskCount--;
+    if (taskCount <= 0) {
+      taskCount = 0;
+      taskRunning.set(false);
+      resetContentStream(-1);
+      clearChatBuf();
+      taskTokenUsage.set(null);
+      currentTaskName.set(null);
+      stopTokenPoll();
+    }
     refreshProgress(true);
 
     if (d.success) {
       const name = taskLabel(d.task);
       addToast(translate('toast.taskDone', { name }), 'success');
+    } else if (d.task === 'chapter_generation') {
+      api('GET', '/api/progress').then(p => {
+        progress.set(p);
+        if (!p?.pending_writing_conflict) {
+          lastFailedTask.set({ task: d.task, taskName: taskLabel(d.task) });
+        }
+      }).catch(() => {
+        lastFailedTask.set({ task: d.task, taskName: taskLabel(d.task) });
+      });
     } else {
-      // 任务失败时记录重试信息
       lastFailedTask.set({ task: d.task, taskName: taskLabel(d.task) });
     }
 
@@ -152,8 +173,11 @@ export function connectSSE() {
     }
   });
 
-  // 一次新的流式输出开始（章节生成/修订/润色），清空旧缓冲，
-  // 避免事实核查重试或自动连写时新旧内容叠加。
+  eventSource.addEventListener('token_usage', e => {
+    const d = JSON.parse(e.data);
+    taskTokenUsage.set(d);
+  });
+
   eventSource.addEventListener('stream_start', e => {
     const d = JSON.parse(e.data);
     resetContentStream(d.chapter_idx);
@@ -167,15 +191,6 @@ export function connectSSE() {
     }
     contentBuf += d.text;
     if (!contentTimer) contentTimer = setTimeout(flushContentBuf, FLUSH_INTERVAL);
-  });
-
-  eventSource.addEventListener('stream_progress', e => {
-    const d = JSON.parse(e.data);
-    addLog({
-      level: 'info',
-      msg: translate('log.streamProgress', { chars: d.char_count }),
-      time: new Date().toLocaleTimeString(getLocale() === 'en' ? 'en-US' : 'zh-CN', { hour12: false }),
-    });
   });
 
   eventSource.addEventListener('continue_analysis', e => {
@@ -203,6 +218,18 @@ export function connectSSE() {
     foreshadowSuggestions.set(items);
     foreshadowShowSuggestions.set(true);
     addToast(translate('toast.foreshadowReady', { n: items.length }), 'info');
+  });
+
+  eventSource.addEventListener('foreshadow_outline_conflicts', e => {
+    const d = JSON.parse(e.data);
+    refreshProgress(true);
+    addToast(translate('toast.foreshadowOutlineConflict', { n: (d.conflicts || []).length }), 'warning');
+  });
+
+  eventSource.addEventListener('writing_conflict', e => {
+    const d = JSON.parse(e.data);
+    refreshProgress(true);
+    addToast(translate('toast.writingConflict'), 'warning');
   });
 
   eventSource.addEventListener('chat_chunk', e => {
@@ -248,9 +275,10 @@ export function connectSSE() {
     const d = JSON.parse(e.data);
     currentChatSession.update(s => {
       if (!s) return s;
+      const display = formatToolResult(d.result, d.result_key, d.result_args, locale);
       const toolCalls = (s.pending_tool_calls || []).map(tc =>
         tc.name === d.tool_name && tc.status === 'running'
-          ? { ...tc, status: 'done', result: d.result }
+          ? { ...tc, status: 'done', result: display, result_key: d.result_key, result_args: d.result_args }
           : tc
       );
       return { ...s, pending_tool_calls: toolCalls };
