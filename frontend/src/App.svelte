@@ -141,47 +141,44 @@
     </main>
   {:else}
     <div class="flex flex-1 overflow-hidden">
-      <!-- Left: Nav + Content -->
-      <div class="flex flex-col w-1/2 min-w-[320px] border-r border-base-content/10 shrink-0">
-        <!-- Nav -->
-        <nav class="flex bg-base-200 border-b border-base-content/10 px-3 py-2 shrink-0 gap-1">
-          {#each [
-            ['config', '⚙️', 'nav.config'],
-            ['outline', '📝', 'nav.outline'],
-            ['writing', '✍️', 'nav.writing'],
-            ['foreshadows', '🔗', 'nav.foreshadows'],
-            ['relations', '🕸️', 'nav.relations'],
-            ['skills', '🧩', 'nav.skills']
-          ] as [page, icon, labelKey]}
-            <button
-              class="btn btn-sm text-sm px-4 gap-1.5 {$currentPage === page ? 'btn-primary' : 'btn-ghost'}"
-              on:click={() => window.location.hash = '#' + page}
-            >
-              <span class="text-xs">{icon}</span>{$t(labelKey)}
-            </button>
-          {/each}
-        </nav>
+      <!-- Left: vertical nav -->
+      <nav class="flex flex-col w-44 shrink-0 bg-base-200 border-r border-base-content/10 py-3 px-2 gap-0.5">
+        {#each [
+          ['config', '⚙️', 'nav.config'],
+          ['outline', '📝', 'nav.outline'],
+          ['writing', '✍️', 'nav.writing'],
+          ['foreshadows', '🔗', 'nav.foreshadows'],
+          ['relations', '🕸️', 'nav.relations'],
+          ['skills', '🧩', 'nav.skills']
+        ] as [page, icon, labelKey]}
+          <button
+            class="btn btn-sm justify-start w-full gap-2 px-3 text-sm {$currentPage === page ? 'btn-primary font-medium' : 'btn-ghost'}"
+            on:click={() => window.location.hash = '#' + page}
+          >
+            <span class="text-xs">{icon}</span>{$t(labelKey)}
+          </button>
+        {/each}
+      </nav>
 
-        <!-- Content -->
-        <main class="flex-1 overflow-y-auto p-4">
-          {#if $currentPage === 'config'}
-            <Config {sendToChat} />
-          {:else if $currentPage === 'outline'}
-            <Outline {sendToChat} />
-          {:else if $currentPage === 'writing'}
-            <Writing {sendToChat} />
-          {:else if $currentPage === 'foreshadows'}
-            <Foreshadows />
-          {:else if $currentPage === 'relations'}
-            <Relations />
-          {:else if $currentPage === 'skills'}
-            <Skills />
-          {/if}
-        </main>
-      </div>
+      <!-- Center: page content -->
+      <main class="flex-1 min-w-0 overflow-y-auto p-4 border-r border-base-content/10">
+        {#if $currentPage === 'config'}
+          <Config {sendToChat} />
+        {:else if $currentPage === 'outline'}
+          <Outline {sendToChat} />
+        {:else if $currentPage === 'writing'}
+          <Writing {sendToChat} />
+        {:else if $currentPage === 'foreshadows'}
+          <Foreshadows />
+        {:else if $currentPage === 'relations'}
+          <Relations />
+        {:else if $currentPage === 'skills'}
+          <Skills />
+        {/if}
+      </main>
 
       <!-- Right: Chat Panel -->
-      <div class="flex-1 bg-base-200 overflow-hidden">
+      <div class="flex-1 min-w-0 bg-base-200 overflow-hidden">
         <ChatPanel bind:this={chatPanel} contextPage={$currentPage} />
       </div>
     </div>

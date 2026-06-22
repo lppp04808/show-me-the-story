@@ -113,7 +113,7 @@ task dev                              # 编译并启动 Go 后端
 | `index.html` | 入口 HTML，`data-theme="xianii"` |
 | `src/main.js` | Svelte 应用挂载点 |
 | `src/app.css` | 全局样式：Tailwind 指令 + 自定义滚动条/toast 动画 |
-| `src/App.svelte` | 根组件：Header（项目badge + 项目语言 badge ZH/EN + 版本号badge + 新版本更新提示（非dev版本检查GitHub releases）+ 「切换 / 新建项目」按钮（任务运行时禁用）+ 阶段badge + 章节进度badge + AI思考中badge + 右侧 UI 语言切换按钮中 / EN） + 顶部导航（配置/大纲/写作/伏笔/图谱/技能，带图标） + 页面路由 + LogPanel + Toast 容器；初始加载若有当前项目则 `setLocale(project.language)` |
+| `src/App.svelte` | 根组件：Header（项目badge + 项目语言 badge ZH/EN + 版本号badge + 新版本更新提示（非dev版本检查GitHub releases）+ 「切换 / 新建项目」按钮（任务运行时禁用）+ 阶段badge + 章节进度badge + AI思考中badge + 右侧 UI 语言切换按钮中 / EN） + 左侧竖排导航（配置/大纲/写作/伏笔/图谱/技能，图标+文字，约 176px）+ 中间页面内容 + 右侧 ChatPanel + Toast 容器；初始加载若有当前项目则 `setLocale(project.language)` |
 | `src/lib/api.js` | `api(method, url, body)` — fetch 封装，自动带 `X-UI-Locale`/`Accept-Language` 头，错误消息走 `translateServerMessage` |
 | `src/lib/router.js` | `currentPage` store + hash 路由监听 |
 | `src/lib/stores.js` | 全局 Svelte stores（progress、config、settings、postprocess、taskRunning、taskTokenUsage、autoConfirm、lastFailedTask、`projectLanguage`、`pendingConfigChanges`/`showConfigChangePanel` 等）+ toast/log 管理 |
