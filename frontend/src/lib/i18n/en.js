@@ -162,6 +162,8 @@ export default {
   'log.outline_auto_revised': 'Chapter outline auto-revised to match current story',
   'log.outline_consistent': 'Chapter outline consistent with story ✓',
   'log.prose_done': 'Prose complete — {0} characters',
+  'log.chapter_length_retry': '[Length] Draft is {0} chars, need {1}–{2} — regenerating (attempt {3})...',
+  'log.chapter_length_off_range': '[Length] Still {0} chars after retries (need {1}–{2}) — please review manually; auto-confirm will continue to the next chapter',
   'log.summary_done': 'Summary extraction complete',
   'log.factcheck_retry': '[Fact-check] Issues found — regenerating chapter {0} (retry {1})...',
   'log.factcheck_details': 'Check details: {0}',

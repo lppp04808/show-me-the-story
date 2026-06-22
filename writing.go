@@ -164,7 +164,10 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 			return fmt.Errorf("任务已取消")
 		}
 		logger.StepInfo(2, 6, "正在构思并撰写正文...")
-		content := generateChapterContentStreamWithRetryLog(ctx, apiCfg, cfg, state, i, settings, extraConstraints, logger)
+		content, err := generateChapterContentWithLengthControl(ctx, apiCfg, cfg, state, i, settings, extraConstraints, logger)
+		if err != nil {
+			return err
+		}
 		if content == "" {
 			return fmt.Errorf("正文生成失败或被取消")
 		}
@@ -202,7 +205,10 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 			if analysis.Reconcilable && strings.TrimSpace(analysis.ExtraConstraints) != "" {
 				logger.InfoKey("log.conflict_retry")
 				extraConstraints = strings.TrimSpace(analysis.ExtraConstraints)
-				content = generateChapterContentStreamWithRetryLog(ctx, apiCfg, cfg, state, i, settings, extraConstraints, logger)
+				content, err = generateChapterContentWithLengthControl(ctx, apiCfg, cfg, state, i, settings, extraConstraints, logger)
+				if err != nil {
+					return err
+				}
 				if content == "" {
 					return fmt.Errorf("正文生成失败或被取消")
 				}
@@ -502,6 +508,9 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 	outlineConstraints := buildOutlineConstraintsForLang(state, idx, lang)
 	memoryContext := buildMemoryForLang(state, idx, lang)
 
+	minLen, maxLen := calcChapterLengthRange(snapshot.TargetWordsPerChapter)
+	targetWords := snapshot.TargetWordsPerChapter
+
 	userPrompt := RenderPrompt(cfg.Prompts.ChapterWriting, map[string]string{
 		"Title":              preferUserValue(cfg.Story.Title, state.Title),
 		"ChapterNum":         fmt.Sprintf("%d", ch.Num),
@@ -515,11 +524,14 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 		"WritingPOV":         cfg.Story.WritingPOV,
 		"CharacterContext":   characterContext,
 		"WorldviewContext":   worldviewContext,
-		"TargetWords":        fmt.Sprintf("%d", snapshot.TargetWordsPerChapter),
+		"TargetWords":        fmt.Sprintf("%d", targetWords),
+		"TargetWordsMin":     fmt.Sprintf("%d", minLen),
+		"TargetWordsMax":     fmt.Sprintf("%d", maxLen),
 		"Foreshadows":        foreshadowContext,
 		"Memory":             memoryContext,
 		"OutlineConstraints": outlineConstraints,
 	})
+	userPrompt = finalizeChapterWritingPrompt(cfg.Prompts.ChapterWriting, userPrompt, minLen, maxLen, targetWords, lang)
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.OutlineConstraints}}", outlineConstraints)
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.Foreshadows}}", foreshadowContext)
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.Memory}}", memoryContext)

@@ -166,6 +166,8 @@ export default {
   'log.outline_auto_revised': '本章大纲已自动修订以匹配当前剧情',
   'log.outline_consistent': '本章大纲与当前剧情一致 ✓',
   'log.prose_done': '正文撰写完毕，共 {0} 字',
+  'log.chapter_length_retry': '[字数控制] 当前 {0} 字，要求 {1}–{2} 字，正在第 {3} 次重新撰写...',
+  'log.chapter_length_off_range': '[字数控制] 重写后仍为 {0} 字（要求 {1}–{2} 字），请用户在审核时处理；自动确认模式下将继续下一章',
   'log.summary_done': '摘要提炼完成',
   'log.factcheck_retry': '[事实核查] 发现问题，正在重新生成第 {0} 章（第 {1} 次重试）...',
   'log.factcheck_details': '核查详情: {0}',

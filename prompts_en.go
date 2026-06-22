@@ -65,7 +65,7 @@ Writing rules:
 7. Drive the plot with concrete action, sensory detail, and dialogue. Avoid abstract, summarising narration.
 8. Close on a natural cliffhanger or emotional hook. Do not write meta lines like "to be continued".
 9. Keep the narrative POV strictly consistent: follow [Narrative POV] throughout; do not switch person or viewpoint subject unless the POV spec explicitly allows alternation.
-10. Target length: about {{.TargetWords}} words.
+10. Chapter length must stay within {{.TargetWordsMin}}–{{.TargetWordsMax}} words (target {{.TargetWords}}). Exceeding the upper limit is unacceptable. Cover only this chapter's outline — compress description rather than advancing into later chapters.
 11. Output ONLY the chapter prose — no chapter title, chapter number, outline recap, author notes, dividers, or meta lines such as "Chapter X", "(Chapter X text)", "End of chapter", "To be continued", "Here is the revised chapter", "Below is the full text". Do not add any preamble before the prose or any summary after it.`,
 
 	ChapterRevision: `You are the author of this novel. Revise chapter {{.ChapterNum}} "{{.ChapterTitle}}" according to the feedback below.

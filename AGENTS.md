@@ -51,6 +51,7 @@ task dev                              # 编译并启动 Go 后端
                   ├─ outline_helpers.go ← 大纲字数区间 calcOutlineLengthRange、角色列表注入、首次登场解析
                   ├─ outline_character.go ← 大纲人物一致性检查 + runOutlinePostProcessChecks
                   ├─ writing.go     ← 写作阶段逻辑 + 上下文注入 + 去AI味
+                  ├─ writing_length.go ← 章节正文字数区间计算 + 生成后校验/重试 + 超限警告
                   ├─ foreshadow.go  ← 伏笔系统
                   ├─ continue.go    ← 续写功能（导入分析）
                   ├─ reconcile.go   ← 设定协调逻辑（AI 自动兼容新旧设定）
@@ -79,7 +80,8 @@ task dev                              # 编译并启动 Go 后端
 | `outline.go` | `generateOutline`（注入 settings 角色列表 + 按 `target_words_per_chapter` 计算大纲字数下限，不足时自动重试）、`reviseOutline`、`GenerateOutlineAction`（存在已确认章节时拒绝整体重新生成；完成后 `runOutlinePostProcessChecks`）、`ReviseOutlineAction`、`ConfirmOutlineAction`、`EditChapterOutline`、`cleanJSONResponse` |
 | `outline_helpers.go` | `calcOutlineLengthRange`、`formatCharacterListForOutline`、`validateOutlineChapterLengths`、`buildOutlineDerivedCharacterContext`（写作时注入未登记大纲人物 stub） |
 | `outline_character.go` | `CheckOutlineCharacterConsistency`、`RunOutlineCharacterCheckAndSave`、`runOutlinePostProcessChecks`（伏笔-大纲 + 大纲人物双检查） |
-| `writing.go` | `GenerateChapterAction`（含写前大纲一致性检查，共 6 步；第 5 步更新伏笔并落盘 `Foreshadows.md`；第 6 步维护叙事记忆）、`ReviseChapterAction`/`ReviseSpecificChapterAction`（修订后同步更新伏笔与记忆）、`ConfirmChapterAction`、`PolishChapterAction`、`SmoothTransitionsAction`（批量优化已确认章节衔接，逐章最小化重写开头、逐章落盘）、`parseFactCheckResult`（JSON 优先 + 字符串 fallback）、`checkOutlineConsistency`（写前检查本章大纲与已写剧情冲突，冲突时最小化修订本章大纲）、章节内容生成/摘要/事实核查/流式输出、`stripChapterMetaProse`（生成/修订/润色后剔除首尾元信息行）、`buildHistorySummary`、`buildPreviousChapterTail`（上一章尾部约 800 字注入写作 prompt）、`buildOutlineConstraints`（全书章节脉络反向约束：后续 10 章大纲防提前出现 + 前文大纲防一次性事件重复，注入写作与事实核查 prompt）、`appendIfMissingPlaceholder`（老项目持久化旧模板缺新占位符时把上下文块追加到渲染结果末尾兜底）、`splitChapterOpening`、`syncMemoryAfterChapter`（第 6 步记忆维护）、`calcMemoryMaxTokens`（记忆 token 上限自动计算） |
+| `writing_length.go` | `calcChapterLengthRange`（±1000 字或 ±15% 取较大者）、`generateChapterContentWithLengthControl`（生成后字数校验，最多 2 次重写；仍超限则 `log.chapter_length_off_range` 警告并保留当前稿由用户审核，不阻塞写作/自动确认）、老模板 `finalizeChapterWritingPrompt` 兜底 |
+| `writing.go` | `GenerateChapterAction`（含写前大纲一致性检查，共 6 步；第 2 步经 `generateChapterContentWithLengthControl` 控字数；第 5 步更新伏笔并落盘 `Foreshadows.md`；第 6 步维护叙事记忆）、`ReviseChapterAction`/`ReviseSpecificChapterAction`（修订后同步更新伏笔与记忆）、`ConfirmChapterAction`、`PolishChapterAction`、`SmoothTransitionsAction`（批量优化已确认章节衔接，逐章最小化重写开头、逐章落盘）、`parseFactCheckResult`（JSON 优先 + 字符串 fallback）、`checkOutlineConsistency`（写前检查本章大纲与已写剧情冲突，冲突时最小化修订本章大纲）、章节内容生成/摘要/事实核查/流式输出、`stripChapterMetaProse`（生成/修订/润色后剔除首尾元信息行）、`buildHistorySummary`、`buildPreviousChapterTail`（上一章尾部约 800 字注入写作 prompt）、`buildOutlineConstraints`（全书章节脉络反向约束：后续 10 章大纲防提前出现 + 前文大纲防一次性事件重复，注入写作与事实核查 prompt）、`appendIfMissingPlaceholder`（老项目持久化旧模板缺新占位符时把上下文块追加到渲染结果末尾兜底）、`splitChapterOpening`、`syncMemoryAfterChapter`（第 6 步记忆维护）、`calcMemoryMaxTokens`（记忆 token 上限自动计算） |
 | `foreshadow.go` | `SuggestForeshadows`、`UpdateForeshadows`、伏笔格式化注入、伏笔告警、`BuildForeshadowRoadmapMarkdown`、`SaveForeshadowRoadmap`、`syncForeshadowsAfterChapter`、`NextForeshadowID` |
 | `foreshadow_consistency.go` | `CheckForeshadowOutlineConsistency`、`RunForeshadowOutlineCheckAndSave`（大纲/伏笔变更后自动检查，报告写入 `progress.last_foreshadow_outline_report`） |
 | `writing_conflict.go` | `analyzeWritingConflict`、`WritingConflictError`、事实核查多次失败后的根因分析与用户处理选项 |
@@ -548,6 +550,7 @@ pending → writing → review → accepted
 | `{{.CharacterContext}}` | `buildCharacterContext()` | 结构化角色详情（从 settings 匹配） |
 | `{{.WorldviewContext}}` | `buildWorldviewContext()` | 结构化世界观详情（从 settings 匹配） |
 | `{{.TargetWords}}` | snapshot | 每章目标字数 |
+| `{{.TargetWordsMin}}` / `{{.TargetWordsMax}}` | `calcChapterLengthRange` | 可接受正文字数区间（±1000 或 ±15% 取较大者；老模板缺占位符时由 `finalizeChapterWritingPrompt` 追加说明块） |
 | `{{.Foreshadows}}` | `formatActiveForeshadowsForChapter()` | 活跃伏笔上下文 |
 | `{{.Memory}}` | `buildMemoryForLang()` | 叙事记忆（早期章节的关键细节，含自动截取的原文片段；无记忆时为空；老模板缺占位符时追加到 prompt 末尾） |
 | `{{.OutlineConstraints}}` | `buildOutlineConstraints()` | 全书章节脉络反向约束（后续 10 章大纲防提前出现 + 前文大纲防一次性事件重复；无内容时为空；老模板缺占位符时追加到 prompt 末尾） |
