@@ -62,13 +62,14 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config
 
 	logger.StepInfo(2, 3, "正在更新设定...")
 
-	adjustedStory := cfg.Story
-	adjustedStory.Type = result.Type
-	adjustedStory.WritingStyle = result.WritingStyle
-	adjustedStory.WritingPOV = result.WritingPOV
-	adjustedStory.StorySynopsis = result.StorySynopsis
+	adjustedStory := storyConfigFromReconciliation(result, newSettings)
+	conflicts := collectStoryConfigConflicts(newSettings, adjustedStory, "reconcile", result.Explanation)
+	pendingPath := PendingConfigChangesPath(progressPath)
 
-	state.StoryConfigSnapshot = &adjustedStory
+	cfg.Story = newSettings
+	syncProgressMetaFromStory(state, newSettings)
+	snapshot := newSettings
+	state.StoryConfigSnapshot = &snapshot
 
 	hasPending := false
 	for _, ch := range state.Chapters {
@@ -80,15 +81,10 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config
 
 	if hasPending {
 		logger.StepInfo(3, 3, "正在基于新设定重新生成待定章节大纲...")
-		origStory := cfg.Story
-		cfg.Story = adjustedStory
-		if err := regeneratePendingOutlines(ctx, apiCfg, cfg, state, logger); err != nil {
+		if err := regeneratePendingOutlines(ctx, apiCfg, cfg, state, progressPath, cfgPath, logger); err != nil {
 			logger.WarnKey("log.reconcile_pending_outline_failed", err)
 		}
-		cfg.Story = origStory
 	}
-
-	cfg.Story = adjustedStory
 
 	if err := saveConfig(cfgPath, cfg); err != nil {
 		return fmt.Errorf("保存配置失败: %w", err)
@@ -98,22 +94,17 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config
 		return fmt.Errorf("保存进度失败: %w", err)
 	}
 
+	if err := appendPendingChanges(pendingPath, conflicts, logger); err != nil {
+		return err
+	}
+
 	RunForeshadowOutlineCheckAndSave(ctx, apiCfg, cfg, state, progressPath, logger)
 
 	logger.SuccessKey("log.reconcile_done_explain" + result.Explanation)
 
 	changedFields := []string{}
-	if result.Type != newSettings.Type {
-		changedFields = append(changedFields, "type")
-	}
-	if result.WritingStyle != newSettings.WritingStyle {
-		changedFields = append(changedFields, "writing_style")
-	}
-	if result.WritingPOV != newSettings.WritingPOV {
-		changedFields = append(changedFields, "writing_pov")
-	}
-	if result.StorySynopsis != newSettings.StorySynopsis {
-		changedFields = append(changedFields, "story_synopsis")
+	for _, c := range conflicts {
+		changedFields = append(changedFields, c.Field)
 	}
 
 	logger.SettingsReconciled(map[string]interface{}{
@@ -124,7 +115,7 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config
 	return nil
 }
 
-func regeneratePendingOutlines(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, logger *LogBroadcaster) error {
+func regeneratePendingOutlines(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath, cfgPath string, logger *LogBroadcaster) error {
 	lang := cfg.Language
 	en := NormalizeLanguage(lang) == LangEN
 
@@ -181,7 +172,5 @@ func regeneratePendingOutlines(ctx context.Context, apiCfg *APIConfig, cfg *Conf
 		return fmt.Errorf("解析修订大纲JSON失败: %w", err)
 	}
 
-	applyOutlineRevision(resp, state)
-
-	return nil
+	return applyOutlineRevision(cfg, state, resp, "outline_revision", PendingConfigChangesPath(progressPath), cfgPath, logger)
 }

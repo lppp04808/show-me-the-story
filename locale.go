@@ -76,6 +76,26 @@ var errorCatalog = map[string]map[string]string{
 		LangZH: "缺少 content 字段",
 		LangEN: "content field is required",
 	},
+	"missing_fields": {
+		LangZH: "缺少 fields 字段",
+		LangEN: "fields array is required",
+	},
+	"no_pending_changes": {
+		LangZH: "没有待确认的配置变更",
+		LangEN: "No pending config changes",
+	},
+	"load_pending_config_failed": {
+		LangZH: "加载待确认配置失败: %s",
+		LangEN: "Failed to load pending config changes: %s",
+	},
+	"save_pending_config_failed": {
+		LangZH: "保存待确认配置失败: %s",
+		LangEN: "Failed to save pending config changes: %s",
+	},
+	"delete_pending_config_failed": {
+		LangZH: "清除待确认配置失败: %s",
+		LangEN: "Failed to clear pending config changes: %s",
+	},
 	"invalid_chapter_num": {
 		LangZH: "无效的章节编号",
 		LangEN: "Invalid chapter number",

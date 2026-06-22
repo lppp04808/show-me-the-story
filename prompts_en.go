@@ -29,7 +29,8 @@ Rules:
 3. Each chapter outline must list the characters who appear; mark each new character with "first appearance" in the chapter they debut, and ensure they do not appear in any earlier chapter.
 4. One-time events such as first meetings and identity reveals must happen in exactly one chapter — never repeat them.
 5. core_prompt should bundle the directives that guide the whole novel, including writing style and narrative POV, and must require a consistent POV throughout.
-6. Output strict JSON only. No extra prose.`,
+6. If [Story type], [Writing style], [Narrative POV], or [Synopsis] were provided by the user and are non-empty, echo those values verbatim in the JSON — do not rewrite or expand them.
+7. Output strict JSON only. No extra prose.`,
 
 	ChapterWriting: `Write the prose for chapter {{.ChapterNum}} of the novel "{{.Title}}".
 

@@ -382,6 +382,78 @@ func (h *Handlers) PutConfig(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, h.cfg)
 }
 
+func (h *Handlers) GetPendingConfigChanges(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	pending, err := LoadPendingConfigChanges(PendingConfigChangesPath(h.progressPath))
+	if err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "load_pending_config_failed", err.Error())
+		return
+	}
+	h.writeJSON(w, http.StatusOK, pending)
+}
+
+func (h *Handlers) PostApplyConfigChanges(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+	var body struct {
+		Fields []string `json:"fields"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Fields) == 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "missing_fields")
+		return
+	}
+
+	pendingPath := PendingConfigChangesPath(h.progressPath)
+	pending, err := LoadPendingConfigChanges(pendingPath)
+	if err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "load_pending_config_failed", err.Error())
+		return
+	}
+	if len(pending.Changes) == 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "no_pending_changes")
+		return
+	}
+
+	applySelectedPendingChanges(h.cfg, h.state, pending, body.Fields)
+
+	if err := saveConfig(h.cfgPath, h.cfg); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_config_failed", err.Error())
+		return
+	}
+	if err := SaveProgress(h.progressPath, h.state); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err.Error())
+		return
+	}
+	if err := removePendingFields(pendingPath, body.Fields...); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_pending_config_failed", err.Error())
+		return
+	}
+
+	h.logger.SettingsUpdated()
+	h.broadcastProgress()
+	h.writeJSON(w, http.StatusOK, h.cfg)
+}
+
+func (h *Handlers) DeletePendingConfigChanges(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+	if err := SavePendingConfigChanges(PendingConfigChangesPath(h.progressPath), &PendingConfigChanges{}); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "delete_pending_config_failed", err.Error())
+		return
+	}
+	h.writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+}
+
 func (h *Handlers) GetProgress(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, h.state)
 }
@@ -454,7 +526,7 @@ func (h *Handlers) PostOutlineGenerate(w http.ResponseWriter, r *http.Request) {
 		ctx := h.taskCtx
 
 		h.logger.InfoKey("log.outline_generating")
-		err := GenerateOutlineAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.logger)
+		err := GenerateOutlineAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.cfgPath, h.logger)
 
 		if err != nil {
 			if ctx.Err() != nil {
@@ -521,7 +593,7 @@ func (h *Handlers) PostOutlineRevise(w http.ResponseWriter, r *http.Request) {
 		ctx := h.taskCtx
 
 		h.logger.InfoKey("log.outline_revising")
-		err := ReviseOutlineAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, body.Feedback, h.logger)
+		err := ReviseOutlineAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.cfgPath, body.Feedback, h.logger)
 
 		if err != nil {
 			if ctx.Err() != nil {

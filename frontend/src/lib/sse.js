@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, taskTokenUsage, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions } from './stores.js';
+import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, taskTokenUsage, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, pendingConfigChanges, showConfigChangePanel } from './stores.js';
 import { api } from './api.js';
 import { getLocale, translate, formatLogEntry, formatToolResult } from './i18n/index.js';
 
@@ -218,6 +218,16 @@ export function connectSSE() {
     foreshadowSuggestions.set(items);
     foreshadowShowSuggestions.set(true);
     addToast(translate('toast.foreshadowReady', { n: items.length }), 'info');
+  });
+
+  eventSource.addEventListener('config_change_proposal', e => {
+    const d = JSON.parse(e.data);
+    const items = (d || []).map(c => ({ ...c, _selected: true }));
+    pendingConfigChanges.set(items);
+    showConfigChangePanel.set(items.length > 0);
+    if (items.length > 0) {
+      addToast(translate('toast.configChangeProposal', { n: items.length }), 'info');
+    }
   });
 
   eventSource.addEventListener('foreshadow_outline_conflicts', e => {

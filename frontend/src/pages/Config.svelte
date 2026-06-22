@@ -3,6 +3,7 @@
   import { api } from '../lib/api.js';
   import { apiConfig, config, progress, settings, editingCharID, editingWvID, wvFilter, addToast, showConfirm, taskRunning } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
+  import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
 
   export let sendToChat = async () => {};
 
@@ -361,6 +362,7 @@
 </script>
 
 <div class="space-y-3">
+  <ConfigChangePanel />
   <!-- API + Story Config: side by side -->
   <div class="grid grid-cols-2 gap-3">
     <div class="card bg-base-200 shadow-sm">

@@ -175,6 +175,10 @@ func (lb *LogBroadcaster) SettingsUpdated() {
 	lb.Emit("settings_updated", map[string]string{"status": "ok"})
 }
 
+func (lb *LogBroadcaster) ConfigChangeProposal(changes []ConfigFieldChange) {
+	lb.Emit("config_change_proposal", changes)
+}
+
 func (lb *LogBroadcaster) PostProcessReport(reportType, content string) {
 	lb.Emit("postprocess_report", map[string]string{
 		"type":    reportType,

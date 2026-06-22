@@ -288,6 +288,7 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 	sb.WriteString("- 调用工具时，**不要输出任何解释文字**，直接输出 <tool_call> 标签。解释放在收到工具结果之后。\n")
 	sb.WriteString("- 当用户提交故事配置时（如「请更新以下故事配置」），使用 update_project_config 工具。\n")
 	sb.WriteString("- 当用户提交写作风格或故事梗概的更新时（如「请更新写作风格:」或「请更新故事梗概:」），使用 update_project_config 工具保存对应字段。\n")
+	sb.WriteString("- **配置保护**：若某字段用户已在配置页填写（非空），你不得静默覆盖。需要修改时，先在对话中说明当前值与建议值的差异及理由，等用户明确同意后再调用 update_project_config 并传入 confirm_overwrite=true。\n")
 	sb.WriteString("- 当用户要求创建/修改角色、世界观等设定时，直接使用对应的工具完成操作。\n")
 	sb.WriteString("- 当用户要求生成大纲、生成章节等操作时，使用对应的工具。如果是异步工具，告知用户等待。\n")
 	sb.WriteString("- 在生成大纲之前，提醒用户检查配置页面中的各项设定（故事类型、写作风格、故事梗概、角色、世界观），确认无误后再进行。\n")
@@ -378,6 +379,7 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 	sb.WriteString("- When calling a tool, **output NO explanatory text** — emit the <tool_call> tag directly. Explain after you receive the tool result.\n")
 	sb.WriteString("- When the user submits a story-config update (e.g. \"please update the following story config\"), use update_project_config.\n")
 	sb.WriteString("- When the user submits a writing-style or synopsis update (e.g. \"please update writing style:\" or \"please update synopsis:\"), use update_project_config to save the corresponding field.\n")
+	sb.WriteString("- **Config protection**: If a field is already filled in by the user (non-empty), you must NOT overwrite it silently. Explain the diff and your reasoning in chat, wait for explicit user approval, then call update_project_config with confirm_overwrite=true.\n")
 	sb.WriteString("- When the user asks you to create/edit characters, worldview, etc., use the corresponding tool directly.\n")
 	sb.WriteString("- When the user asks for outline/chapter generation, use the corresponding tool. If async, tell the user to wait.\n")
 	sb.WriteString("- Before generating the outline, remind the user to check the Config page (story type, writing style, synopsis, characters, worldview) and confirm everything looks right.\n")
@@ -1100,8 +1102,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_project_config",
-			Description: "更新故事配置。如果存在已确认章节，会自动触发设定协调。",
-			Parameters:  `{"type": "故事类型", "title": "标题", "chapter_count": 30, "target_words_per_chapter": 2500, "writing_style": "写作风格", "writing_pov": "叙述视角", "story_synopsis": "故事梗概"}`,
+			Description: "更新故事配置。如果存在已确认章节，会自动触发设定协调。覆盖用户已填字段需 confirm_overwrite=true。",
+			Parameters:  `{"type": "故事类型", "title": "标题", "chapter_count": 30, "target_words_per_chapter": 2500, "writing_style": "写作风格", "writing_pov": "叙述视角", "story_synopsis": "故事梗概", "confirm_overwrite": false}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Type                  string `json:"type"`
@@ -1111,9 +1113,32 @@ func getBuiltinTools() []Tool {
 					WritingStyle          string `json:"writing_style"`
 					WritingPOV            string `json:"writing_pov"`
 					StorySynopsis         string `json:"story_synopsis"`
+					ConfirmOverwrite      bool   `json:"confirm_overwrite"`
 				}
 				if err := json.Unmarshal(args, &params); err != nil {
 					return "", agentErr(ctx, "invalid_json", err)
+				}
+
+				proposed := ctx.Config.Story
+				if params.Type != "" {
+					proposed.Type = params.Type
+				}
+				if params.Title != "" {
+					proposed.Title = params.Title
+				}
+				if params.WritingStyle != "" {
+					proposed.WritingStyle = params.WritingStyle
+				}
+				if params.WritingPOV != "" {
+					proposed.WritingPOV = params.WritingPOV
+				}
+				if params.StorySynopsis != "" {
+					proposed.StorySynopsis = params.StorySynopsis
+				}
+
+				conflicts := collectStoryConfigConflicts(ctx.Config.Story, proposed, "agent", "")
+				if len(conflicts) > 0 && !params.ConfirmOverwrite {
+					return formatConfigConflictMessage(conflicts, ctx.Config.Language), nil
 				}
 
 				if params.Type != "" {
@@ -1138,8 +1163,17 @@ func getBuiltinTools() []Tool {
 					ctx.Config.Story.StorySynopsis = params.StorySynopsis
 				}
 
+				syncProgressMetaFromStory(ctx.State, ctx.Config.Story)
+
 				if err := saveConfig(ctx.CfgPath, ctx.Config); err != nil {
 					return "", agentErr(ctx, "save_config_failed", err)
+				}
+
+				if params.ConfirmOverwrite {
+					pendingPath := PendingConfigChangesPath(ctx.ProgressPath)
+					for _, c := range conflicts {
+						_ = removePendingFields(pendingPath, c.Field)
+					}
 				}
 
 				hasAccepted := false
@@ -1185,7 +1219,7 @@ func getBuiltinTools() []Tool {
 					}
 				}
 				ctx.StartAsync("outline_generation", func(goCtx context.Context) error {
-					err := GenerateOutlineAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, ctx.Logger)
+					err := GenerateOutlineAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, ctx.CfgPath, ctx.Logger)
 					if err != nil {
 						ctx.Logger.Error(fmt.Sprintf("大纲生成失败: %v", err))
 					}
@@ -1228,7 +1262,7 @@ func getBuiltinTools() []Tool {
 				}
 				feedback := params.Feedback
 				ctx.StartAsync("outline_revision", func(goCtx context.Context) error {
-					err := ReviseOutlineAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, feedback, ctx.Logger)
+					err := ReviseOutlineAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, ctx.CfgPath, feedback, ctx.Logger)
 					if err != nil {
 						ctx.Logger.Error(fmt.Sprintf("大纲修订失败: %v", err))
 					}

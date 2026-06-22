@@ -1,9 +1,12 @@
 <script>
   import { api } from '../lib/api.js';
-  import { progress, streamingContent, streamingChapterIdx, taskRunning, addToast, showConfirm, continueAnalysis } from '../lib/stores.js';
+  import { progress, config, streamingContent, streamingChapterIdx, taskRunning, addToast, showConfirm, continueAnalysis } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
+  import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
 
   $: p = $progress;
+  $: displayTitle = $config?.story?.title || p?.title || '';
+  $: displaySynopsis = $config?.story?.story_synopsis || p?.story_synopsis || '';
   $: chapters = p?.chapters || [];
   $: hasOutline = chapters.length > 0;
   $: hasAccepted = chapters.some(c => c.status === 'accepted');
@@ -188,11 +191,12 @@
       </div>
     {/if}
   {:else}
+    <ConfigChangePanel />
     <!-- 操作栏 -->
     <div class="card bg-base-200 shadow-sm">
       <div class="card-body p-4 gap-2">
         <div class="flex items-center gap-2 flex-wrap">
-          <h3 class="text-base font-semibold flex-1 min-w-0 truncate">📖 {p.title || $t('common.untitled')}</h3>
+          <h3 class="text-base font-semibold flex-1 min-w-0 truncate">📖 {displayTitle || $t('common.untitled')}</h3>
           {#if inOutlinePhase}
             <button class="btn btn-success btn-xs" on:click={confirmOutline} disabled={$taskRunning || chapters.length === 0}>{$t('outline.btn.confirm')}</button>
           {/if}
@@ -229,10 +233,10 @@
             <div class="bg-base-300 rounded p-2 text-sm mt-0.5 max-h-24 overflow-y-auto">{p.core_prompt}</div>
           </div>
         {/if}
-        {#if p.story_synopsis}
+        {#if displaySynopsis}
           <div>
             <span class="text-xs text-base-content/50">{$t('outline.synopsis')}</span>
-            <div class="bg-base-300 rounded p-2 text-sm mt-0.5 max-h-24 overflow-y-auto">{p.story_synopsis}</div>
+            <div class="bg-base-300 rounded p-2 text-sm mt-0.5 max-h-24 overflow-y-auto">{displaySynopsis}</div>
           </div>
         {/if}
       </div>

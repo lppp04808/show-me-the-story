@@ -8,10 +8,10 @@ import (
 )
 
 type OutlineResponse struct {
-	Title        string           `json:"title"`
-	CorePrompt   string           `json:"core_prompt"`
-	StorySynopsis string          `json:"story_synopsis"`
-	Chapters     []OutlineChapter `json:"chapters"`
+	Title         string           `json:"title"`
+	CorePrompt    string           `json:"core_prompt"`
+	StorySynopsis string           `json:"story_synopsis"`
+	Chapters      []OutlineChapter `json:"chapters"`
 }
 
 type OutlineChapter struct {
@@ -25,12 +25,12 @@ func generateOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config) (*Outl
 	targetWordsStr := fmt.Sprintf("%d", cfg.Story.TargetWordsPerChapter)
 
 	userPrompt := RenderPrompt(cfg.Prompts.OutlineGeneration, map[string]string{
-		"StoryType":        cfg.Story.Type,
-		"ChapterCount":     chapterCountStr,
-		"TargetWords":      targetWordsStr,
-		"WritingStyle":     cfg.Story.WritingStyle,
-		"WritingPOV":       cfg.Story.WritingPOV,
-		"StorySynopsis":    cfg.Story.StorySynopsis,
+		"StoryType":     cfg.Story.Type,
+		"ChapterCount":  chapterCountStr,
+		"TargetWords":   targetWordsStr,
+		"WritingStyle":  cfg.Story.WritingStyle,
+		"WritingPOV":    cfg.Story.WritingPOV,
+		"StorySynopsis": cfg.Story.StorySynopsis,
 	})
 
 	systemPrompt := SystemPromptFor(cfg.Language, "outline_editor_json")
@@ -50,7 +50,7 @@ func generateOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config) (*Outl
 	return &resp, nil
 }
 
-func reviseOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, userFeedback string) error {
+func reviseOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, userFeedback, progressPath, cfgPath string, logger *LogBroadcaster) error {
 	lang := cfg.Language
 	en := NormalizeLanguage(lang) == LangEN
 
@@ -92,12 +92,10 @@ func reviseOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *P
 		return fmt.Errorf("解析修订大纲JSON失败: %w\n原始响应: %s", err, rawResp)
 	}
 
-	applyOutlineRevision(resp, state)
-
-	return nil
+	return applyOutlineRevision(cfg, state, resp, "outline_revision", PendingConfigChangesPath(progressPath), cfgPath, logger)
 }
 
-func applyOutlineRevision(resp OutlineResponse, state *Progress) {
+func applyOutlineRevision(cfg *Config, state *Progress, resp OutlineResponse, source, pendingPath, cfgPath string, logger *LogBroadcaster) error {
 	lockedMap := make(map[int]bool)
 	for _, ch := range state.Chapters {
 		if ch.Status == StatusAccepted {
@@ -114,15 +112,7 @@ func applyOutlineRevision(resp OutlineResponse, state *Progress) {
 		}
 	}
 
-	if resp.Title != "" {
-		state.Title = resp.Title
-	}
-	if resp.CorePrompt != "" {
-		state.CorePrompt = resp.CorePrompt
-	}
-	if resp.StorySynopsis != "" {
-		state.StorySynopsis = resp.StorySynopsis
-	}
+	return applyOutlineMetaWithGuard(cfg, state, resp, source, pendingPath, cfgPath, logger)
 }
 
 func truncate(s string, maxLen int) string {
@@ -146,12 +136,10 @@ func cleanJSONResponse(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func GenerateOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath string, logger *LogBroadcaster) error {
+func GenerateOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath, cfgPath string, logger *LogBroadcaster) error {
 	if err := validateAPIConfig(apiCfg); err != nil {
 		return err
 	}
-	// 防护：整体生成大纲会覆盖全部章节，存在已确认章节时绝不允许，
-	// 否则会静默抹掉已写完的内容。续写场景请使用 GenerateContinuationOutline。
 	for _, ch := range state.Chapters {
 		if ch.Status == StatusAccepted {
 			return fmt.Errorf("存在已确认章节，无法整体重新生成大纲（会覆盖已完成内容）。如需追加章节请使用「生成后续大纲」")
@@ -167,9 +155,6 @@ func GenerateOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 
 	logger.StepInfo(2, 2, "正在保存大纲...")
 
-	state.Title = outlineResp.Title
-	state.CorePrompt = outlineResp.CorePrompt
-	state.StorySynopsis = outlineResp.StorySynopsis
 	state.Chapters = make([]ChapterState, len(outlineResp.Chapters))
 	for i, ch := range outlineResp.Chapters {
 		state.Chapters[i] = ChapterState{
@@ -179,6 +164,11 @@ func GenerateOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 			Status:  StatusPending,
 		}
 	}
+
+	if err := applyOutlineMetaWithGuard(cfg, state, *outlineResp, "outline_generation", PendingConfigChangesPath(progressPath), cfgPath, logger); err != nil {
+		return err
+	}
+
 	snapshot := cfg.Story
 	state.StoryConfigSnapshot = &snapshot
 
@@ -190,10 +180,10 @@ func GenerateOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 	return nil
 }
 
-func ReviseOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath, feedback string, logger *LogBroadcaster) error {
+func ReviseOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath, cfgPath, feedback string, logger *LogBroadcaster) error {
 	logger.StepInfo(1, 2, "正在根据意见修订大纲...")
 
-	if err := reviseOutline(ctx, apiCfg, cfg, state, feedback); err != nil {
+	if err := reviseOutline(ctx, apiCfg, cfg, state, feedback, progressPath, cfgPath, logger); err != nil {
 		return fmt.Errorf("修订大纲失败: %w", err)
 	}
 

@@ -71,6 +71,7 @@ export default {
   'toast.foreshadowOutlineConflict': '检测到 {n} 条伏笔与大纲冲突，请查看伏笔页',
   'toast.writingConflict': '事实核查多次失败，请选择处理方向',
   'toast.settingsReconciled': '设定协调完成：{detail}',
+  'toast.configChangeProposal': 'AI 建议修改 {n} 项配置 — 请确认是否采纳',
 
   // Task names (used by SSE for "task_start"/"task_end")
   'task.outline_generation': '大纲生成',
@@ -305,6 +306,25 @@ export default {
   'config.pov.placeholder': '如：第三人称全知、第三人称限知（跟随女主）、第一人称女主视角、第一人称交替男女主视角...',
   'config.synopsis.title': '故事梗概',
   'config.synopsis.placeholder': '可包含：故事主线走向、核心冲突、关键转折点...',
+
+  'configChange.title': 'AI 配置变更建议（{n} 项）',
+  'configChange.hint': '以下字段你已填写，AI 建议修改。勾选后点击「采纳选中」才会写入配置。',
+  'configChange.current': '当前',
+  'configChange.proposed': '建议',
+  'configChange.empty': '（空）',
+  'configChange.adopt': '采纳选中',
+  'configChange.dismiss': '全部忽略',
+  'configChange.pickRequired': '请至少选择一项',
+  'configChange.applied': '已采纳 {n} 项配置变更',
+  'configChange.field.type': '故事类型',
+  'configChange.field.title': '标题',
+  'configChange.field.writing_style': '写作风格',
+  'configChange.field.writing_pov': '叙述视角',
+  'configChange.field.story_synopsis': '故事梗概',
+  'configChange.source.outline_generation': '大纲生成',
+  'configChange.source.outline_revision': '大纲修订',
+  'configChange.source.reconcile': '设定协调',
+  'configChange.source.agent': '助理',
 
   'config.char.title': '角色管理',
   'config.char.empty': '暂无角色，点击下方按钮创建。',
