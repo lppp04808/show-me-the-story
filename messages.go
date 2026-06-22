@@ -438,6 +438,26 @@ var messageCatalog = map[string]map[string]string{
 		LangZH: "伏笔与大纲一致性检查通过 ✓",
 		LangEN: "Foreshadow/outline consistency check passed ✓",
 	},
+	"log.outline_chapters_too_short": {
+		LangZH: "第 %s 章大纲不足 %d 字，正在要求 AI 扩写…",
+		LangEN: "Chapter %s outline(s) under %d characters — asking AI to expand…",
+	},
+	"log.outline_chapters_still_short": {
+		LangZH: "第 %s 章大纲仍不足 %d 字（已重试），请在大纲页手动补充",
+		LangEN: "Chapter %s outline(s) still under %d characters after retry — please expand on the Outline page",
+	},
+	"log.outline_character_check_failed": {
+		LangZH: "大纲人物检查失败: %v",
+		LangEN: "Outline character check failed: %v",
+	},
+	"log.outline_character_report_save_failed": {
+		LangZH: "保存大纲人物检查报告失败: %v",
+		LangEN: "Failed to save outline character check report: %v",
+	},
+	"log.outline_character_check_pass": {
+		LangZH: "大纲人物与已登记角色一致 ✓",
+		LangEN: "Outline characters match registered list ✓",
+	},
 	"log.foreshadow_plan_parsed": {
 		LangZH: "伏笔方案解析完成，共 %d 条",
 		LangEN: "Foreshadow plan parsed — %d items",

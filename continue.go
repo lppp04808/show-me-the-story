@@ -137,7 +137,7 @@ func ImportContinueAction(cfg *Config, state *Progress, analysis *ContinueAnalys
 	return nil
 }
 
-func GenerateContinuationOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, newChapterCount int, progressPath string, logger *LogBroadcaster) error {
+func GenerateContinuationOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, settings *ProjectSettings, newChapterCount int, progressPath string, logger *LogBroadcaster) error {
 	logger.StepInfo(1, 2, "正在构建已有章节上下文...")
 
 	lang := cfg.Language
@@ -162,34 +162,24 @@ func GenerateContinuationOutline(ctx context.Context, apiCfg *APIConfig, cfg *Co
 
 	startNum := len(state.Chapters) + 1
 
-	userPrompt := RenderPrompt(cfg.Prompts.ContinuationOutlineGeneration, map[string]string{
-		"Title":            state.Title,
-		"StoryType":        snapshot.Type,
-		"CorePrompt":       state.CorePrompt,
-		"StorySynopsis":    state.StorySynopsis,
-		"WritingStyle":     snapshot.WritingStyle,
-		"WritingPOV":       snapshot.WritingPOV,
-		"ExistingOutline":  existingOutline,
-		"NewChapterCount":  fmt.Sprintf("%d", newChapterCount),
-		"StartNum":         fmt.Sprintf("%d", startNum),
-	})
-
-	systemPrompt := SystemPromptFor(lang, "outline_editor_json")
-
-	rawResp := CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
-	if rawResp == "" {
-		return fmt.Errorf("API 调用失败或被取消")
-	}
-	rawResp = cleanJSONResponse(rawResp)
-
-	var resp OutlineResponse
-	if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-		return fmt.Errorf("解析续写大纲JSON失败: %w", err)
+	chapters, err := generateOutlineChaptersOnly(ctx, apiCfg, cfg, settings, cfg.Prompts.ContinuationOutlineGeneration, map[string]string{
+		"Title":           state.Title,
+		"StoryType":       snapshot.Type,
+		"CorePrompt":      state.CorePrompt,
+		"StorySynopsis":   state.StorySynopsis,
+		"WritingStyle":    snapshot.WritingStyle,
+		"WritingPOV":      snapshot.WritingPOV,
+		"ExistingOutline": existingOutline,
+		"NewChapterCount": fmt.Sprintf("%d", newChapterCount),
+		"StartNum":        fmt.Sprintf("%d", startNum),
+	}, logger)
+	if err != nil {
+		return err
 	}
 
 	logger.StepInfo(2, 2, "正在保存续写大纲...")
 
-	for _, ch := range resp.Chapters {
+	for _, ch := range chapters {
 		state.Chapters = append(state.Chapters, ChapterState{
 			Num:     ch.Num,
 			Title:   ch.Title,
@@ -198,22 +188,12 @@ func GenerateContinuationOutline(ctx context.Context, apiCfg *APIConfig, cfg *Co
 		})
 	}
 
-	if resp.Title != "" {
-		state.Title = resp.Title
-	}
-	if resp.CorePrompt != "" {
-		state.CorePrompt = resp.CorePrompt
-	}
-	if resp.StorySynopsis != "" {
-		state.StorySynopsis = resp.StorySynopsis
-	}
-
 	if err := SaveProgress(progressPath, state); err != nil {
 		return fmt.Errorf("保存进度失败: %w", err)
 	}
 
-	RunForeshadowOutlineCheckAndSave(ctx, apiCfg, cfg, state, progressPath, logger)
+	runOutlinePostProcessChecks(ctx, apiCfg, cfg, state, settings, progressPath, logger)
 
-	logger.InfoKey("log.continuation_outline_summary", len(resp.Chapters), len(state.Chapters))
+	logger.InfoKey("log.continuation_outline_summary", len(chapters), len(state.Chapters))
 	return nil
 }

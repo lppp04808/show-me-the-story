@@ -18,19 +18,23 @@ Return JSON in exactly this structure:
 
 [Story type] {{.StoryType}}
 [Chapter count] {{.ChapterCount}}
-[Words per chapter] {{.TargetWords}}
+[Prose words per chapter] {{.TargetWords}}
 [Writing style] {{.WritingStyle}}
 [Narrative POV] {{.WritingPOV}}
 [Synopsis] {{.StorySynopsis}}
 
+[Registered characters]
+{{.CharacterList}}
+
 Rules:
 1. The outline must cover the full story arc, from inciting incident to resolution.
-2. Each chapter outline must describe concrete plot beats, not vague summaries.
-3. Each chapter outline must list the characters who appear; mark each new character with "first appearance" in the chapter they debut, and ensure they do not appear in any earlier chapter.
-4. One-time events such as first meetings and identity reveals must happen in exactly one chapter — never repeat them.
-5. core_prompt should bundle the directives that guide the whole novel, including writing style and narrative POV, and must require a consistent POV throughout.
-6. If [Story type], [Writing style], [Narrative POV], or [Synopsis] were provided by the user and are non-empty, echo those values verbatim in the JSON — do not rewrite or expand them.
-7. Output strict JSON only. No extra prose.`,
+2. Each chapter's outline field must be {{.OutlineMinWords}}–{{.OutlineMaxWords}} characters (excluding the chapter title), with concrete plot beats — no vague one-liners.
+3. Each chapter outline must cover, in order: opening scene/location; core conflict or goal; key turning point; characters appearing (with roles); chapter ending or hook.
+4. Prefer [Registered characters]. Add unlisted characters only when necessary; mark their debut with "first appearance" plus a one-line role/relationship, and never in an earlier chapter.
+5. One-time events such as first meetings and identity reveals must happen in exactly one chapter — never repeat them.
+6. core_prompt should bundle the directives that guide the whole novel, including writing style and narrative POV, and must require a consistent POV throughout.
+7. If [Story type], [Writing style], [Narrative POV], or [Synopsis] were provided by the user and are non-empty, echo those values verbatim in the JSON — do not rewrite or expand them.
+8. Output strict JSON only. No extra prose.`,
 
 	ChapterWriting: `Write the prose for chapter {{.ChapterNum}} of the novel "{{.Title}}".
 
@@ -147,6 +151,9 @@ or
 [Locked chapters (must not be changed)]
 {{.LockedChapters}}
 
+[Registered characters]
+{{.CharacterList}}
+
 Return the revised full outline as JSON:
 {
   "title": "Novel title",
@@ -162,7 +169,8 @@ Rules:
 1. Locked chapter contents may not be changed; only unlocked chapters may be edited.
 2. Keep the total chapter count and numbering unchanged unless the feedback explicitly requires adding or removing chapters.
 3. Return chapters unrelated to the feedback verbatim. Do not refactor them while you're at it.
-4. Output strict JSON only. No extra prose.`,
+4. Unlocked chapter outlines must be {{.OutlineMinWords}}–{{.OutlineMaxWords}} characters with concrete beats (scene, conflict, turning point, characters, hook); prefer [Registered characters].
+5. Output strict JSON only. No extra prose.`,
 
 	ForeshadowPlanning: `You are a senior narrative architect who specialises in foreshadow design. Design a foreshadow plan for the novel outline below.
 
@@ -279,6 +287,9 @@ Output strict JSON only.`,
 [Existing chapters]
 {{.ExistingOutline}}
 
+[Registered characters]
+{{.CharacterList}}
+
 Produce outlines for {{.NewChapterCount}} more chapters, starting at chapter {{.StartNum}}.
 
 Return JSON:
@@ -291,10 +302,46 @@ Return JSON:
 
 Rules:
 1. The outlines must continue the existing storyline coherently.
-2. Each outline should describe concrete plot beats, not vague summaries.
-3. List the characters appearing in each chapter; mark new characters with "first appearance" in their debut chapter.
-4. One-time events already used in prior chapters (first meeting, identity reveal, etc.) must not be re-scheduled.
-5. Output strict JSON only.`,
+2. Each outline field must be {{.OutlineMinWords}}–{{.OutlineMaxWords}} characters with concrete plot beats — no vague summaries.
+3. Cover opening scene, core conflict, turning point, characters with roles, and ending hook.
+4. Prefer [Registered characters]; mark new ones with "first appearance" plus a one-line description.
+5. One-time events already used in prior chapters (first meeting, identity reveal, etc.) must not be re-scheduled.
+6. Output strict JSON only.`,
+
+	OutlineCharacterCheck: `You are a strict story-settings editor. Compare characters appearing in the full chapter outline against the registered character list.
+
+[Title] {{.Title}}
+
+[Registered characters]
+{{.RegisteredCharacters}}
+
+[Full outline]
+{{.Outline}}
+
+[Confirmed chapter summaries (helps judge who already appeared in prose)]
+{{.AcceptedSummaries}}
+
+Tasks:
+1. Find characters who appear in the outline but are NOT in [Registered characters] (including those marked "first appearance" or unnamed-in-settings proper names).
+2. Ignore crowd labels ("villagers", "guards") and generic "someone/mysterious figure" unless the outline gives a proper name.
+3. Do not report names already listed under [Registered characters].
+
+Return JSON only:
+{
+  "has_suggestions": true,
+  "summary": "brief note",
+  "suggestions": [
+    {
+      "name": "Character name",
+      "chapter_num": 5,
+      "description": "one-line note extracted from the outline",
+      "role": "relationship or narrative role (optional)"
+    }
+  ]
+}
+
+If everything matches:
+{"has_suggestions": false, "summary": "Outline characters match registered list", "suggestions": []}`,
 
 	TransitionSmoothing: `You are a senior novel editor in charge of polishing chapter-to-chapter transitions. Below are the end of the previous chapter and the opening of the current chapter. Decide whether the opening naturally continues from the previous ending.
 

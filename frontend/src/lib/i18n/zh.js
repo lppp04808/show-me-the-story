@@ -69,6 +69,7 @@ export default {
   'toast.taskDone': '✓ {name}已完成',
   'toast.foreshadowReady': '伏笔建议已生成，共 {n} 条 — 请前往「伏笔」页确认',
   'toast.foreshadowOutlineConflict': '检测到 {n} 条伏笔与大纲冲突，请查看伏笔页',
+  'toast.outlineCharacterReady': '检测到 {n} 个未登记的大纲人物 — 请在大纲页确认是否加入角色管理',
   'toast.writingConflict': '事实核查多次失败，请选择处理方向',
   'toast.settingsReconciled': '设定协调完成：{detail}',
   'toast.configChangeProposal': 'AI 建议修改 {n} 项配置 — 请确认是否采纳',
@@ -458,6 +459,14 @@ export default {
   'outline.status.review': '审核中',
   'outline.status.accepted': '已确认',
   'outline.streamHint': '正在生成中...',
+  'outline.charSuggestions.title': '未登记的大纲人物（{n}）',
+  'outline.charSuggestions.hint': '以下人物出现在章节大纲中，但尚未在「配置 → 角色管理」中登记。勾选后可一键创建角色条目（含大纲描述）。',
+  'outline.charSuggestions.line': '首次出现：第 {chapter} 章 · {role}',
+  'outline.charSuggestions.noRole': '角色',
+  'outline.charSuggestions.adopt': '加入角色管理',
+  'outline.charSuggestions.dismiss': '暂不处理',
+  'outline.charSuggestions.noneSelected': '请至少勾选一个人物',
+  'outline.charSuggestions.adopted': '已登记 {n} 个角色',
 
   // ---- Writing page ----
   'writing.notReady.title': '尚未进入写作阶段',

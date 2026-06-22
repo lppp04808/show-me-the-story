@@ -159,6 +159,10 @@ func (lb *LogBroadcaster) ForeshadowOutlineConflicts(report *ForeshadowOutlineRe
 	lb.Emit("foreshadow_outline_conflicts", report)
 }
 
+func (lb *LogBroadcaster) OutlineCharacterSuggestions(suggestions []OutlineCharacterSuggestion) {
+	lb.Emit("outline_character_suggestions", suggestions)
+}
+
 func (lb *LogBroadcaster) WritingConflict(conflict *WritingConflict) {
 	lb.Emit("writing_conflict", conflict)
 }

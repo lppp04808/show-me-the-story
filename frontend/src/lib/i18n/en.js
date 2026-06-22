@@ -67,6 +67,7 @@ export default {
   'toast.taskDone': '✓ {name} done',
   'toast.foreshadowReady': '{n} foreshadow suggestions ready — head to the Foreshadows page to confirm',
   'toast.foreshadowOutlineConflict': '{n} foreshadow/outline conflicts detected — see the Foreshadows page',
+  'toast.outlineCharacterReady': '{n} unregistered outline character(s) detected — confirm on the Outline page',
   'toast.writingConflict': 'Fact-check failed repeatedly — choose how to proceed',
   'toast.settingsReconciled': 'Settings reconciled: {detail}',
   'toast.configChangeProposal': '{n} AI config change(s) pending — review and confirm',
@@ -454,6 +455,14 @@ export default {
   'outline.status.review': 'In review',
   'outline.status.accepted': 'Confirmed',
   'outline.streamHint': 'Generating...',
+  'outline.charSuggestions.title': 'Unregistered outline characters ({n})',
+  'outline.charSuggestions.hint': 'These names appear in chapter outlines but are not in Config → Characters. Select entries to create character records from the outline notes.',
+  'outline.charSuggestions.line': 'First in chapter {chapter} · {role}',
+  'outline.charSuggestions.noRole': 'character',
+  'outline.charSuggestions.adopt': 'Add to character list',
+  'outline.charSuggestions.dismiss': 'Dismiss',
+  'outline.charSuggestions.noneSelected': 'Select at least one character',
+  'outline.charSuggestions.adopted': '{n} character(s) added',
 
   // ---- Writing page ----
   'writing.notReady.title': 'Writing phase not started',

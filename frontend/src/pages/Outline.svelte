@@ -1,6 +1,6 @@
 <script>
   import { api } from '../lib/api.js';
-  import { progress, config, streamingContent, streamingChapterIdx, taskRunning, addToast, showConfirm, continueAnalysis } from '../lib/stores.js';
+  import { progress, config, streamingContent, streamingChapterIdx, taskRunning, addToast, showConfirm, continueAnalysis, outlineCharacterSuggestions, outlineCharacterShowSuggestions, settings } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
 
@@ -119,6 +119,26 @@
       addToast($t('outline.toasts.importDone'), 'success');
     } catch (e) { addToast(e.message, 'error'); }
   }
+
+  async function confirmCharacterSuggestions() {
+    const selected = $outlineCharacterSuggestions.filter(s => s._selected !== false);
+    if (selected.length === 0) {
+      addToast($t('outline.charSuggestions.noneSelected'), 'error');
+      return;
+    }
+    try {
+      await api('POST', '/api/outline/characters/confirm', { characters: selected });
+      settings.set(await api('GET', '/api/settings'));
+      outlineCharacterSuggestions.set([]);
+      outlineCharacterShowSuggestions.set(false);
+      addToast($t('outline.charSuggestions.adopted', { n: selected.length }), 'success');
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  function dismissCharacterSuggestions() {
+    outlineCharacterSuggestions.set([]);
+    outlineCharacterShowSuggestions.set(false);
+  }
 </script>
 
 <div class="space-y-3">
@@ -192,6 +212,36 @@
     {/if}
   {:else}
     <ConfigChangePanel />
+
+    {#if $outlineCharacterShowSuggestions && $outlineCharacterSuggestions.length > 0}
+      <div class="card bg-base-200 border border-primary/30 shadow-sm">
+        <div class="card-body py-4 gap-3">
+          <h3 class="font-semibold">{$t('outline.charSuggestions.title', { n: $outlineCharacterSuggestions.length })}</h3>
+          <p class="text-sm text-base-content/60">{$t('outline.charSuggestions.hint')}</p>
+          <div class="space-y-2 max-h-72 overflow-y-auto">
+            {#each $outlineCharacterSuggestions as s}
+              <label class="flex gap-3 p-3 rounded-lg bg-base-300/50 cursor-pointer">
+                <input type="checkbox" class="checkbox checkbox-sm mt-1" bind:checked={s._selected} />
+                <div class="min-w-0 flex-1">
+                  <div class="font-medium">{s.name}</div>
+                  {#if s.description}
+                    <div class="text-sm text-base-content/70 mt-1">{s.description}</div>
+                  {/if}
+                  <div class="text-xs text-base-content/50 mt-1">
+                    {$t('outline.charSuggestions.line', { chapter: s.chapter_num, role: s.role || $t('outline.charSuggestions.noRole') })}
+                  </div>
+                </div>
+              </label>
+            {/each}
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={confirmCharacterSuggestions}>{$t('outline.charSuggestions.adopt')}</button>
+            <button class="btn btn-ghost btn-sm" on:click={dismissCharacterSuggestions}>{$t('outline.charSuggestions.dismiss')}</button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
     <!-- 操作栏 -->
     <div class="card bg-base-200 shadow-sm">
       <div class="card-body p-4 gap-2">

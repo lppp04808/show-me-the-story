@@ -426,6 +426,10 @@ var systemPrompts = map[string]map[string]string{
 		LangZH: "你是一位严谨的小说叙事一致性编辑。请严格按照要求的JSON格式输出，不要添加任何额外文字。拿不准时视为无冲突。",
 		LangEN: "You are a strict narrative-consistency editor. Output strict JSON exactly as requested — no extra prose. When unsure, treat as no conflict.",
 	},
+	"outline_character_checker_json": {
+		LangZH: "你是一位严谨的小说设定编辑。请严格按照要求的JSON格式输出，不要添加任何额外文字。拿不准时视为无未登记人物。",
+		LangEN: "You are a strict story-settings editor. Output strict JSON exactly as requested — no extra prose. When unsure, treat as no unregistered characters.",
+	},
 	"writing_conflict_analyst_json": {
 		LangZH: "你是一位资深小说编辑，擅长诊断大纲、伏笔与前情之间的矛盾。请严格按照要求的JSON格式输出，不要添加任何额外文字。",
 		LangEN: "You are a senior novel editor who diagnoses contradictions among outlines, foreshadows, and prior story. Output strict JSON exactly as requested — no extra prose.",

@@ -113,56 +113,58 @@ func buildHistorySummaryForLang(state *Progress, idx int, lang string) string {
 
 // buildCharacterContextForLang returns structured character details injected into writing prompts.
 func buildCharacterContextForLang(settings *ProjectSettings, chapterOutline, lang string) string {
-	if settings == nil || len(settings.Characters) == 0 {
-		return ""
-	}
-
-	var relevant []Character
-	for _, c := range settings.Characters {
-		if strings.Contains(chapterOutline, stripNameMarks(c.Name)) {
-			relevant = append(relevant, c)
-		}
-	}
-	if len(relevant) == 0 {
-		relevant = settings.Characters
-	}
-
-	en := NormalizeLanguage(lang) == LangEN
 	var sb strings.Builder
-	for _, c := range relevant {
-		sb.WriteString(fmt.Sprintf("【%s】", c.Name))
-		if c.Age != "" {
+
+	if settings != nil && len(settings.Characters) > 0 {
+		var relevant []Character
+		for _, c := range settings.Characters {
+			if strings.Contains(chapterOutline, stripNameMarks(c.Name)) {
+				relevant = append(relevant, c)
+			}
+		}
+		if len(relevant) == 0 {
+			relevant = settings.Characters
+		}
+
+		en := NormalizeLanguage(lang) == LangEN
+		for _, c := range relevant {
+			sb.WriteString(fmt.Sprintf("【%s】", c.Name))
+			if c.Age != "" {
+				if en {
+					sb.WriteString(fmt.Sprintf(" Age: %s", c.Age))
+				} else {
+					sb.WriteString(fmt.Sprintf(" 年龄:%s", c.Age))
+				}
+			}
+			sb.WriteString("\n")
+			write := func(label, val string) {
+				if val == "" {
+					return
+				}
+				sb.WriteString(fmt.Sprintf("  %s: %s\n", label, val))
+			}
 			if en {
-				sb.WriteString(fmt.Sprintf(" Age: %s", c.Age))
+				write("Appearance", c.Appearance)
+				write("Personality", c.Personality)
+				write("Background", c.Background)
+				write("Motivation", c.Motivation)
+				write("Abilities", c.Abilities)
+				write("Notes", c.Notes)
 			} else {
-				sb.WriteString(fmt.Sprintf(" 年龄:%s", c.Age))
+				write("外貌", c.Appearance)
+				write("性格", c.Personality)
+				write("背景", c.Background)
+				write("动机", c.Motivation)
+				write("能力", c.Abilities)
+				write("备注", c.Notes)
 			}
+			sb.WriteString("\n")
 		}
-		sb.WriteString("\n")
-		write := func(label, val string) {
-			if val == "" {
-				return
-			}
-			sb.WriteString(fmt.Sprintf("  %s: %s\n", label, val))
-		}
-		if en {
-			write("Appearance", c.Appearance)
-			write("Personality", c.Personality)
-			write("Background", c.Background)
-			write("Motivation", c.Motivation)
-			write("Abilities", c.Abilities)
-			write("Notes", c.Notes)
-		} else {
-			write("外貌", c.Appearance)
-			write("性格", c.Personality)
-			write("背景", c.Background)
-			write("动机", c.Motivation)
-			write("能力", c.Abilities)
-			write("备注", c.Notes)
-		}
-		sb.WriteString("\n")
 	}
 
+	if derived := buildOutlineDerivedCharacterContext(chapterOutline, settings, lang); derived != "" {
+		sb.WriteString(derived)
+	}
 	return sb.String()
 }
 

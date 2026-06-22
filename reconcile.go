@@ -15,7 +15,7 @@ type ReconciliationResult struct {
 }
 
 func ReconcileSettingsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress,
-	newSettings StoryConfig, progressPath string, cfgPath string, logger *LogBroadcaster) error {
+	newSettings StoryConfig, settings *ProjectSettings, progressPath string, cfgPath string, logger *LogBroadcaster) error {
 
 	logger.StepInfo(1, 3, "正在分析已有章节与新设定的兼容性...")
 	lang := cfg.Language
@@ -98,7 +98,7 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config
 		return err
 	}
 
-	RunForeshadowOutlineCheckAndSave(ctx, apiCfg, cfg, state, progressPath, logger)
+	runOutlinePostProcessChecks(ctx, apiCfg, cfg, state, settings, progressPath, logger)
 
 	logger.SuccessKey("log.reconcile_done_explain" + result.Explanation)
 

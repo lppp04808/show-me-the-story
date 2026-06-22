@@ -62,6 +62,7 @@ type PromptsConfig struct {
 	TransitionSmoothing           string `json:"transition_smoothing"`
 	OutlineConsistencyCheck       string `json:"outline_consistency_check"`
 	ForeshadowOutlineConsistency  string `json:"foreshadow_outline_consistency"`
+	OutlineCharacterCheck         string `json:"outline_character_check"`
 	WritingConflictAnalysis       string `json:"writing_conflict_analysis"`
 	BookDiagnosis                 string `json:"book_diagnosis"`
 	BookConsistencyCheck          string `json:"book_consistency_check"`
@@ -237,6 +238,9 @@ func (p *PromptsConfig) applyDefaults(lang string) {
 	}
 	if p.ForeshadowOutlineConsistency == "" {
 		p.ForeshadowOutlineConsistency = defaults.ForeshadowOutlineConsistency
+	}
+	if p.OutlineCharacterCheck == "" {
+		p.OutlineCharacterCheck = defaults.OutlineCharacterCheck
 	}
 	if p.WritingConflictAnalysis == "" {
 		p.WritingConflictAnalysis = defaults.WritingConflictAnalysis

@@ -526,7 +526,7 @@ func (h *Handlers) PostOutlineGenerate(w http.ResponseWriter, r *http.Request) {
 		ctx := h.taskCtx
 
 		h.logger.InfoKey("log.outline_generating")
-		err := GenerateOutlineAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.cfgPath, h.logger)
+		err := GenerateOutlineAction(ctx, h.apiCfg, h.cfg, h.state, h.settings, h.progressPath, h.cfgPath, h.logger)
 
 		if err != nil {
 			if ctx.Err() != nil {
@@ -593,7 +593,7 @@ func (h *Handlers) PostOutlineRevise(w http.ResponseWriter, r *http.Request) {
 		ctx := h.taskCtx
 
 		h.logger.InfoKey("log.outline_revising")
-		err := ReviseOutlineAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.cfgPath, body.Feedback, h.logger)
+		err := ReviseOutlineAction(ctx, h.apiCfg, h.cfg, h.state, h.settings, h.progressPath, h.cfgPath, body.Feedback, h.logger)
 
 		if err != nil {
 			if ctx.Err() != nil {
@@ -612,6 +612,68 @@ func (h *Handlers) PostOutlineRevise(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
+func (h *Handlers) PostOutlineCharactersConfirm(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+
+	var req struct {
+		Characters []OutlineCharacterSuggestion `json:"characters"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if len(req.Characters) == 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", "characters required")
+		return
+	}
+
+	if h.settings == nil {
+		h.settings = &ProjectSettings{}
+	}
+
+	existing := registeredCharacterNameSet(h.settings)
+	for _, item := range req.Characters {
+		name := strings.TrimSpace(stripNameMarks(item.Name))
+		if name == "" || existing[name] {
+			continue
+		}
+		notes := strings.TrimSpace(item.Description)
+		if role := strings.TrimSpace(item.Role); role != "" {
+			if notes != "" {
+				notes += "；"
+			}
+			notes += role
+		}
+		h.settings.Characters = append(h.settings.Characters, Character{
+			ID:       h.settings.nextCharacterID(),
+			Name:     name,
+			Background: notes,
+			Notes:    fmt.Sprintf("首次登场：第%d章", item.ChapterNum),
+		})
+		existing[name] = true
+	}
+
+	if err := SaveProjectSettings(h.settingsPath, h.settings); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_failed", err.Error())
+		return
+	}
+
+	if h.state.LastOutlineCharacterReport != nil {
+		h.state.LastOutlineCharacterReport.HasSuggestions = false
+		h.state.LastOutlineCharacterReport.Suggestions = nil
+		h.state.LastOutlineCharacterReport.Summary = "已采纳建议并登记角色"
+		_ = SaveProgress(h.progressPath, h.state)
+	}
+
+	h.logger.SettingsUpdated()
+	h.writeJSON(w, http.StatusOK, h.settings.Characters)
 }
 
 func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
@@ -1100,7 +1162,7 @@ func (h *Handlers) PostSettingsReconcile(w http.ResponseWriter, r *http.Request)
 		ctx := h.taskCtx
 
 		h.logger.InfoKey("log.settings_reconciling")
-		err := ReconcileSettingsAction(ctx, h.apiCfg, h.cfg, h.state, body, h.progressPath, h.cfgPath, h.logger)
+		err := ReconcileSettingsAction(ctx, h.apiCfg, h.cfg, h.state, body, h.settings, h.progressPath, h.cfgPath, h.logger)
 
 		if err != nil {
 			if ctx.Err() != nil {
@@ -1574,7 +1636,7 @@ func (h *Handlers) PostOutlineGenerateContinuation(w http.ResponseWriter, r *htt
 		ctx := h.taskCtx
 
 		h.logger.InfoKey("log.continuation_outline_generating")
-		err := GenerateContinuationOutline(ctx, h.apiCfg, h.cfg, h.state, body.ChapterCount, h.progressPath, h.logger)
+		err := GenerateContinuationOutline(ctx, h.apiCfg, h.cfg, h.state, h.settings, body.ChapterCount, h.progressPath, h.logger)
 
 		if err != nil {
 			if ctx.Err() != nil {

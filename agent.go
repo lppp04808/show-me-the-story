@@ -1230,7 +1230,7 @@ func getBuiltinTools() []Tool {
 				if hasAccepted && ctx.StartAsync != nil {
 					newSettings := ctx.Config.Story
 					ctx.StartAsync("settings_reconciliation", func(goCtx context.Context) error {
-						err := ReconcileSettingsAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, newSettings, ctx.ProgressPath, ctx.CfgPath, ctx.Logger)
+						err := ReconcileSettingsAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, newSettings, ctx.Settings, ctx.ProgressPath, ctx.CfgPath, ctx.Logger)
 						if err != nil {
 							ctx.Logger.Error(fmt.Sprintf("设定协调失败: %v", err))
 						}
@@ -1262,7 +1262,7 @@ func getBuiltinTools() []Tool {
 					}
 				}
 				ctx.StartAsync("outline_generation", func(goCtx context.Context) error {
-					err := GenerateOutlineAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, ctx.CfgPath, ctx.Logger)
+					err := GenerateOutlineAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.Settings, ctx.ProgressPath, ctx.CfgPath, ctx.Logger)
 					if err != nil {
 						ctx.Logger.Error(fmt.Sprintf("大纲生成失败: %v", err))
 					}
@@ -1305,7 +1305,7 @@ func getBuiltinTools() []Tool {
 				}
 				feedback := params.Feedback
 				ctx.StartAsync("outline_revision", func(goCtx context.Context) error {
-					err := ReviseOutlineAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, ctx.CfgPath, feedback, ctx.Logger)
+					err := ReviseOutlineAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.Settings, ctx.ProgressPath, ctx.CfgPath, feedback, ctx.Logger)
 					if err != nil {
 						ctx.Logger.Error(fmt.Sprintf("大纲修订失败: %v", err))
 					}

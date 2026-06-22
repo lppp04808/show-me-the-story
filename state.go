@@ -90,6 +90,7 @@ type Progress struct {
 	StoryConfigSnapshot         *StoryConfig             `json:"story_config_snapshot,omitempty"`
 	Foreshadows                 []Foreshadow             `json:"foreshadows,omitempty"`
 	LastForeshadowOutlineReport *ForeshadowOutlineReport `json:"last_foreshadow_outline_report,omitempty"`
+	LastOutlineCharacterReport  *OutlineCharacterReport  `json:"last_outline_character_report,omitempty"`
 	PendingWritingConflict      *WritingConflict         `json:"pending_writing_conflict,omitempty"`
 	MemoryEntries               []MemoryEntry            `json:"memory_entries,omitempty"`
 	MemoryMaxTokens             int                      `json:"memory_max_tokens,omitempty"`

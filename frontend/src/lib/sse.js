@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, taskTokenUsage, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, pendingConfigChanges, showConfigChangePanel } from './stores.js';
+import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, taskTokenUsage, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, outlineCharacterSuggestions, outlineCharacterShowSuggestions, pendingConfigChanges, showConfigChangePanel } from './stores.js';
 import { api } from './api.js';
 import { getLocale, translate, formatLogEntry, formatToolResult } from './i18n/index.js';
 import { TOKEN_POLL_INTERVAL_MS } from './tokenPoll.js';
@@ -223,6 +223,14 @@ export function connectSSE() {
     foreshadowSuggestions.set(items);
     foreshadowShowSuggestions.set(true);
     addToast(translate('toast.foreshadowReady', { n: items.length }), 'info');
+  });
+
+  eventSource.addEventListener('outline_character_suggestions', e => {
+    const d = JSON.parse(e.data);
+    const items = (d || []).map(s => ({ ...s, _selected: true }));
+    outlineCharacterSuggestions.set(items);
+    outlineCharacterShowSuggestions.set(true);
+    addToast(translate('toast.outlineCharacterReady', { n: items.length }), 'info');
   });
 
   eventSource.addEventListener('config_change_proposal', e => {
