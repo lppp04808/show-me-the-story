@@ -84,6 +84,7 @@ task dev                              # 编译并启动 Go 后端
 | `prose_units.go` | `countProseUnits`（CJK +1；连续字母数字 token +1，内部 `.` `,` `-` `#` 连接；全角字母数字视同半角；标点/空白断词不计数；中英文共用） |
 | `writing_length.go` | `calcChapterLengthRange`（±1000 字或 ±15% 取较大者）、`generateChapterContentWithLengthControl`（生成/重写间 `maybeUpdateBestDraft` 保留最佳稿；略超/略低 soft 容忍跳过 adjust；中度偏差对 best 压缩/扩展；adjust 未改善则回退 best；仍超限 `log.chapter_length_off_range` 警告，不阻塞自动确认）、老模板 `finalizeChapterWritingPrompt` 兜底 |
 | `writing.go` | `GenerateChapterAction`（含写前大纲一致性检查，共 6 步；第 2 步经 `generateChapterContentWithLengthControl` 控字数；第 5 步更新伏笔并落盘 `Foreshadows.md`；第 6 步维护叙事记忆）、`ReviseChapterAction`/`ReviseSpecificChapterAction`（修订后同步更新伏笔与记忆）、`ConfirmChapterAction`、`PolishChapterAction`、`SmoothTransitionsAction`（批量优化已确认章节衔接，逐章最小化重写开头、逐章落盘）、`parseFactCheckResult`（JSON 优先 + 字符串 fallback）、`checkOutlineConsistency`（写前检查本章大纲与已写剧情冲突，冲突时最小化修订本章大纲）、章节内容生成/摘要/事实核查/流式输出、`stripChapterMetaProse`（生成/修订/润色后剔除首尾元信息行）、`buildHistorySummary`、`buildPreviousChapterTail`（上一章尾部约 800 字注入写作 prompt）、`buildOutlineConstraints`（全书章节脉络反向约束：后续 10 章大纲防提前出现 + 前文大纲防一次性事件重复，注入写作与事实核查 prompt）、`appendIfMissingPlaceholder`（老项目持久化旧模板缺新占位符时把上下文块追加到渲染结果末尾兜底）、`splitChapterOpening`、`syncMemoryAfterChapter`（第 6 步记忆维护）、`calcMemoryMaxTokens`（记忆 token 上限自动计算） |
+| `writing_delete.go` | `resolveDeleteChapterTarget` / `DeleteFrontierChapter`：`delete_chapter` 清除**写作前沿**章节正文（`CurrentChapterIndex` 处 review 章；或下一章 pending 时前一 accepted 章；或全书已确认时的最后一章），同步回退指针、清除该章叙事记忆；`formatWritingFrontierInfo` 注入 Agent 系统提示 |
 | `foreshadow.go` | `SuggestForeshadows`、`UpdateForeshadows`、伏笔格式化注入、伏笔告警、`BuildForeshadowRoadmapMarkdown`、`SaveForeshadowRoadmap`、`syncForeshadowsAfterChapter`、`NextForeshadowID` |
 | `foreshadow_consistency.go` | `CheckForeshadowOutlineConsistency`、`RunForeshadowOutlineCheckAndSave`（大纲/伏笔变更后自动检查，报告写入 `progress.last_foreshadow_outline_report`） |
 | `writing_conflict.go` | `analyzeWritingConflict`、`WritingConflictError`、事实核查多次失败后的根因分析与用户处理选项 |
@@ -263,7 +264,7 @@ API 配置（`APIConfig`）与故事配置（`Config`）完全分离，分别保
 
 防止 AI 误删用户数据的多层防护：
 
-1. **系统提示词安全规则**：`buildAgentSystemPrompt` 包含最高优先级的「安全规则」（修改 ≠ 删除）和「工具选择指南」，明确指示修改章节细节必须用 `revise_chapter` 而非删除重写；**缩章/整本重生大纲**（尚无已确认章节）须 `update_project_config` + `generate_outline`，禁止 `revise_outline` 缩章、禁止 `delete_chapters_from` 减章、无需先 `delete_outline`
+1. **系统提示词安全规则**：`buildAgentSystemPrompt` 包含最高优先级的「安全规则」（修改 ≠ 删除）和「工具选择指南」，明确指示修改章节细节必须用 `revise_chapter` 而非删除重写；删除写作前沿单章用 `delete_chapter`（**禁止**误用 `delete_chapters_from`）；删更早章节及之后正文才用 `delete_chapters_from` 并须复述范围；**缩章/整本重生大纲**（尚无已确认章节）须 `update_project_config` + `generate_outline`，禁止 `revise_outline` 缩章、禁止 `delete_chapters_from` 减章、无需先 `delete_outline`
 2. **破坏性工具二次确认**：`delete_chapter`、`delete_chapters_from`、`delete_outline`、`reset_progress` 必须传入 `confirm: true` 参数，否则返回警告信息要求 AI 先向用户确认
 3. **`revise_chapter` 支持任意章节**：可选 `num` 参数，当前审核中章节走 `ReviseChapterAction`（完整流程），其他章节（含已确认）走 `ReviseSpecificChapterAction`（最小化定向修订，不影响其他章节和大纲）
 4. **大纲重新生成保护**：`GenerateOutlineAction` 和 `generate_outline` 工具在存在已确认章节时拒绝执行（防止覆盖已完成内容），追加章节需使用「生成后续大纲」；`generate_outline` 会完全替换 pending 大纲，读取 `config.json` 的 `chapter_count` / `target_words_per_chapter`
@@ -458,7 +459,7 @@ pending → writing → review → accepted
 | POST | `/api/postprocess/consistency` | 异步 | 仅重新运行全书一致性核查 |
 | POST | `/api/postprocess/roadmap` | 异步 | 根据已有报告重新生成路线图 |
 | POST | `/api/postprocess/execute` | 异步 | 执行已勾选工单（可选前置衔接优化 + 逐章修订/润色，逐条落盘可随时停止） |
-| DELETE | `/api/chapter` | 同步 | 删除最后章节 |
+| DELETE | `/api/chapter` | 同步 | 删除写作前沿章节正文（`DeleteFrontierChapter`） |
 | DELETE | `/api/chapters/from/{num}` | 同步 | 从第 N 章删除到末尾 |
 | DELETE | `/api/outline` | 同步 | 删除大纲 |
 | POST | `/api/task/stop` | 同步 | 停止当前运行的任务 |

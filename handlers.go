@@ -1045,26 +1045,19 @@ func (h *Handlers) DeleteChapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(h.state.Chapters) == 0 {
-		h.writeErrorReq(w, r, http.StatusBadRequest, "no_chapters_to_delete")
+	num, err := DeleteFrontierChapter(h.state, h.projectDir())
+	if err != nil {
+		switch err {
+		case ErrNoChaptersToDelete:
+			h.writeErrorReq(w, r, http.StatusBadRequest, "no_chapters_to_delete")
+		case ErrWritingChapterCannotDelete:
+			h.writeErrorReq(w, r, http.StatusConflict, "writing_chapter_cannot_delete")
+		case ErrDeleteFrontierUnavailable:
+			h.writeErrorReq(w, r, http.StatusConflict, "delete_frontier_unavailable")
+		default:
+			h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err.Error())
+		}
 		return
-	}
-
-	lastIdx := len(h.state.Chapters) - 1
-	ch := &h.state.Chapters[lastIdx]
-
-	if ch.Status == StatusWriting {
-		h.writeErrorReq(w, r, http.StatusConflict, "writing_chapter_cannot_delete")
-		return
-	}
-
-	deleteFile(ChapterMarkdownPath(h.projectDir(), ch.Num))
-	ch.Content = ""
-	ch.Summary = ""
-	ch.Status = StatusPending
-
-	if h.state.CurrentChapterIndex > lastIdx {
-		h.state.CurrentChapterIndex = lastIdx
 	}
 
 	if err := SaveProgress(h.progressPath, h.state); err != nil {
@@ -1072,7 +1065,7 @@ func (h *Handlers) DeleteChapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logger.SuccessKey("log.chapter_deleted", ch.Num)
+	h.logger.SuccessKey("log.chapter_deleted", num)
 	h.writeJSON(w, http.StatusOK, h.state)
 }
 

@@ -272,6 +272,11 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 		}
 	}
 
+	if frontierInfo := formatWritingFrontierInfo(ctx.State, LangZH); frontierInfo != "" {
+		sb.WriteString("\n")
+		sb.WriteString(frontierInfo)
+	}
+
 	sb.WriteString("\n")
 
 	enabledSkills := GetEnabledSkills(ctx.Skills, ctx.Config.SkillConfig)
@@ -314,6 +319,8 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 	sb.WriteString("- 修改某章的大纲（未写作的 pending 章节）→ edit_chapter_outline(num, title, outline)\n")
 	sb.WriteString("- 对现有大纲提修改意见且**章数不变** → revise_outline(feedback)（只更新未确认章节的标题/大纲，不能增减章节总数）\n")
 	sb.WriteString("- **调整总章数 / 整本重写大纲**（尚无已确认章节）→ ① update_project_config(chapter_count, target_words_per_chapter) ② generate_outline。generate_outline 会**完全替换**当前全部 pending 大纲；无需先 delete_outline，禁止用 revise_outline 缩章/增章，禁止用 delete_chapters_from\n")
+	sb.WriteString("- 删除写作前沿章节正文（待确认章，或已确认但下一章尚未开始写作）→ delete_chapter。先核对项目信息中的「delete_chapter 当前可删」章号；**禁止**为此使用 delete_chapters_from\n")
+	sb.WriteString("- 删除更早某一章及之后全部正文 → delete_chapters_from(num)（从第 num 章清到全书末章，须先向用户复述范围并确认）。若用户只想删前沿那一章，必须用 delete_chapter\n")
 	sb.WriteString("- 生成下一章正文 → generate_chapter\n")
 	sb.WriteString("- 已有确认章节、想追加新章节 → 不要用 generate_outline（会被拒绝），告知用户在大纲页使用「生成后续大纲」\n\n")
 
@@ -371,6 +378,11 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 		}
 	}
 
+	if frontierInfo := formatWritingFrontierInfo(ctx.State, LangEN); frontierInfo != "" {
+		sb.WriteString("\n")
+		sb.WriteString(frontierInfo)
+	}
+
 	sb.WriteString("\n")
 
 	enabledSkills := GetEnabledSkills(ctx.Skills, ctx.Config.SkillConfig)
@@ -413,6 +425,8 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 	sb.WriteString("- Edit a pending chapter's outline -> edit_chapter_outline(num, title, outline)\n")
 	sb.WriteString("- Give feedback on the existing outline while **keeping the same chapter count** -> revise_outline(feedback) (updates title/outline of unconfirmed chapters only; cannot add or remove chapters)\n")
 	sb.WriteString("- **Change total chapter count / regenerate the whole outline** (no confirmed chapters yet) -> ① update_project_config(chapter_count, target_words_per_chapter) ② generate_outline. generate_outline **fully replaces** all pending outlines; no delete_outline first, never use revise_outline to shrink/grow chapter count, never use delete_chapters_from\n")
+	sb.WriteString("- Delete prose at the writing frontier (chapter in review, or last accepted while the next chapter has not started) -> delete_chapter. Check \"delete_chapter can remove\" in project info; **never** use delete_chapters_from for this\n")
+	sb.WriteString("- Delete an earlier chapter and all prose after it -> delete_chapters_from(num) (clears chapter num through the last outline slot; restate the range and get confirmation). If the user only wants the frontier chapter removed, use delete_chapter\n")
 	sb.WriteString("- Generate the next chapter's prose -> generate_chapter\n")
 	sb.WriteString("- Confirmed chapters exist and the user wants to append more -> do NOT use generate_outline (it will be rejected); tell the user to use \"Generate Continuation Outline\" on the Outline page\n\n")
 
@@ -1501,32 +1515,43 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_chapter",
-			Description: "【危险·不可逆】清除最后一个章节的正文内容（保留大纲）。仅当用户明确要求删除时使用，且必须先向用户确认。",
+			Description: "【危险·不可逆】清除写作前沿章节的正文（保留大纲）。前沿=CurrentChapterIndex 处 review 章，或下一章 pending 时前一 accepted 章，或全书已确认时的最后一章。仅删这一章；删更早章节须用 delete_chapters_from。须先向用户确认。",
 			Parameters:  `{"confirm": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
-				if msg := requireConfirm(ctx, args, "清除最后一个章节的正文"); msg != "" {
-					return msg, nil
-				}
 				if len(ctx.State.Chapters) == 0 {
 					return "", agentErr(ctx, "no_chapters_to_delete")
 				}
-				lastIdx := len(ctx.State.Chapters) - 1
-				ch := &ctx.State.Chapters[lastIdx]
-				if ch.Status == StatusWriting {
-					return "", agentErr(ctx, "writing_chapter_cannot_delete")
+				idx, resolveErr := resolveDeleteChapterTarget(ctx.State)
+				if resolveErr != nil {
+					switch resolveErr {
+					case ErrWritingChapterCannotDelete:
+						return "", agentErr(ctx, "writing_chapter_cannot_delete")
+					case ErrDeleteFrontierUnavailable:
+						return "", agentErr(ctx, "delete_frontier_unavailable")
+					default:
+						return "", agentErr(ctx, "no_chapters_to_delete")
+					}
 				}
-				deleteFile(ChapterMarkdownPath(ctx.ProjectDir, ch.Num))
-				ch.Content = ""
-				ch.Summary = ""
-				ch.Status = StatusPending
-				if ctx.State.CurrentChapterIndex > lastIdx {
-					ctx.State.CurrentChapterIndex = lastIdx
+				targetNum := ctx.State.Chapters[idx].Num
+				if msg := requireConfirm(ctx, args, fmt.Sprintf("清除第 %d 章正文（写作前沿）", targetNum)); msg != "" {
+					return msg, nil
+				}
+				num, err := DeleteFrontierChapter(ctx.State, ctx.ProjectDir)
+				if err != nil {
+					switch err {
+					case ErrWritingChapterCannotDelete:
+						return "", agentErr(ctx, "writing_chapter_cannot_delete")
+					case ErrDeleteFrontierUnavailable:
+						return "", agentErr(ctx, "delete_frontier_unavailable")
+					default:
+						return "", agentErr(ctx, "no_chapters_to_delete")
+					}
 				}
 				if err := SaveProgress(ctx.ProgressPath, ctx.State); err != nil {
 					return "", agentErr(ctx, "save_progress_failed", err)
 				}
-				ctx.Logger.SuccessKey("log.chapter_deleted", ch.Num)
-				return agentMsg(ctx, "agent.chapter_deleted", ch.Num), nil
+				ctx.Logger.SuccessKey("log.chapter_deleted", num)
+				return agentMsg(ctx, "agent.chapter_deleted", num), nil
 			},
 		},
 		{

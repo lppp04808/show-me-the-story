@@ -120,6 +120,7 @@ const serverMessageEN = {
   '不能删除当前正在使用的项目': 'Cannot delete the currently active project',
   '项目不存在': 'Project not found',
   '没有可删除的章节': 'No chapters to delete',
+  '当前写作前沿没有可删除的章节正文': 'No chapter content at the writing frontier to delete',
   '正在写作中的章节无法删除': 'Cannot delete a chapter that is being written',
   '删除范围内有正在写作中的章节，无法删除': 'Delete range contains a chapter being written; cannot delete',
   '请先生成大纲': 'Generate an outline first',

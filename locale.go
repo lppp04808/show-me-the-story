@@ -176,6 +176,10 @@ var errorCatalog = map[string]map[string]string{
 		LangZH: "正在写作中的章节无法删除",
 		LangEN: "Cannot delete a chapter that is being written",
 	},
+	"delete_frontier_unavailable": {
+		LangZH: "当前写作前沿没有可删除的章节正文",
+		LangEN: "No chapter content at the writing frontier to delete",
+	},
 	"writing_range_has_writing": {
 		LangZH: "删除范围内有正在写作中的章节，无法删除",
 		LangEN: "Delete range contains a chapter being written; cannot delete",
