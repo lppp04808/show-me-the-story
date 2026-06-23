@@ -218,7 +218,9 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 		sb.WriteString(fmt.Sprintf("小说标题: 《%s》\n", ctx.State.Title))
 	}
 	sb.WriteString(fmt.Sprintf("当前阶段: %s\n", ctx.State.Phase))
-	sb.WriteString(fmt.Sprintf("章节数: %d\n", len(ctx.State.Chapters)))
+	sb.WriteString(fmt.Sprintf("配置章节数: %d\n", ctx.Config.Story.ChapterCount))
+	sb.WriteString(fmt.Sprintf("当前大纲章节数: %d\n", len(ctx.State.Chapters)))
+	sb.WriteString(fmt.Sprintf("每章目标字数: %d\n", ctx.Config.Story.TargetWordsPerChapter))
 
 	if ctx.Settings != nil {
 		sb.WriteString(fmt.Sprintf("角色数: %d\n", len(ctx.Settings.Characters)))
@@ -271,15 +273,16 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 	sb.WriteString("## 安全规则（最高优先级，违反将造成用户数据永久丢失）\n")
 	sb.WriteString("1. **修改 ≠ 删除**。当用户要求「修改/调整/润色/修正某一章」时，必须且只能使用 revise_chapter 工具（通过 num 参数指定章节号）。绝对禁止通过 delete_chapter / delete_chapters_from / delete_outline / reset_progress 来实现任何形式的「修改」需求。\n")
 	sb.WriteString("2. revise_chapter 支持修订任意已有内容的章节（包括已确认的早期章节），它只改动目标章节本身，不影响其他章节。修改第 6 章的细节就调用 revise_chapter(num=6, feedback=具体意见)，仅此而已。\n")
-	sb.WriteString("3. 删除类工具（delete_chapter、delete_chapters_from、delete_outline、reset_progress）是不可逆的危险操作，仅当用户**明确使用「删除/清空/重置」等字眼**并指明范围时才可使用。使用前必须：先用一条纯文本回复向用户复述将被删除的确切范围（如「将清除第 6~30 章共 25 章的正文内容（大纲保留）」），等用户明确回复确认后，才在下一轮调用工具并传入 confirm=true。注意：delete_chapter / delete_chapters_from 只清除正文（Content、Summary、markdown 文件），保留大纲，章节状态重置为 pending；delete_outline / reset_progress 才会删除大纲和全部数据。\n")
-	sb.WriteString("4. 任何情况下都不要为了「让操作更彻底」「方便重新生成」而扩大删除范围。宁可少做，不可多删。\n")
+	sb.WriteString("3. 删除类工具（delete_chapter、delete_chapters_from、delete_outline、reset_progress）是不可逆的危险操作，仅当用户**明确使用「删除/清空/重置」等字眼**并指明范围时才可使用。使用前必须：先用一条纯文本回复向用户复述将被删除的确切范围（如「将清除第 6~30 章共 25 章的正文内容（大纲保留）」），等用户明确回复确认后，才在下一轮调用工具并传入 confirm=true。注意：delete_chapter / delete_chapters_from 只清除正文（Content、Summary、markdown 文件），保留大纲条目且**不会减少章节总数**；delete_outline / reset_progress 才会删除大纲和全部数据。\n")
+	sb.WriteString("4. 不要扩大删除范围。例外：用户要求「重新生成大纲」「改成 N 章」「整本重写大纲」且尚无已确认章节时，应走「update_project_config + generate_outline」流程，**不是** delete 操作，也**不需要**先 delete_outline。\n")
 	sb.WriteString("5. 拿不准用户意图时，先提问澄清，不要猜测着执行写操作。\n\n")
 
 	sb.WriteString("## 工具选择指南\n")
 	sb.WriteString("- 修改某章内容细节 → revise_chapter(num, feedback)（AI 重写整章）\n")
 	sb.WriteString("- 局部编辑某章（替换行/替换文本/插入/追加）→ edit_chapter_content(num, operation, ...)（精确编辑，不重写整章，适合微调个别段落或修正错误）\n")
 	sb.WriteString("- 修改某章的大纲（未写作的 pending 章节）→ edit_chapter_outline(num, title, outline)\n")
-	sb.WriteString("- 对整体大纲提修改意见 → revise_outline(feedback)（只会改动未确认章节）\n")
+	sb.WriteString("- 对现有大纲提修改意见且**章数不变** → revise_outline(feedback)（只更新未确认章节的标题/大纲，不能增减章节总数）\n")
+	sb.WriteString("- **调整总章数 / 整本重写大纲**（尚无已确认章节）→ ① update_project_config(chapter_count, target_words_per_chapter) ② generate_outline。generate_outline 会**完全替换**当前全部 pending 大纲；无需先 delete_outline，禁止用 revise_outline 缩章/增章，禁止用 delete_chapters_from\n")
 	sb.WriteString("- 生成下一章正文 → generate_chapter\n")
 	sb.WriteString("- 已有确认章节、想追加新章节 → 不要用 generate_outline（会被拒绝），告知用户在大纲页使用「生成后续大纲」\n\n")
 
@@ -309,7 +312,9 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 		sb.WriteString(fmt.Sprintf("Novel title: \"%s\"\n", ctx.State.Title))
 	}
 	sb.WriteString(fmt.Sprintf("Current phase: %s\n", ctx.State.Phase))
-	sb.WriteString(fmt.Sprintf("Chapter count: %d\n", len(ctx.State.Chapters)))
+	sb.WriteString(fmt.Sprintf("Configured chapter count: %d\n", ctx.Config.Story.ChapterCount))
+	sb.WriteString(fmt.Sprintf("Current outline chapter count: %d\n", len(ctx.State.Chapters)))
+	sb.WriteString(fmt.Sprintf("Target words per chapter: %d\n", ctx.Config.Story.TargetWordsPerChapter))
 
 	if ctx.Settings != nil {
 		sb.WriteString(fmt.Sprintf("Characters: %d\n", len(ctx.Settings.Characters)))
@@ -362,15 +367,16 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 	sb.WriteString("## Safety rules (highest priority — violating them causes permanent user-data loss)\n")
 	sb.WriteString("1. **Edit != Delete**. When the user asks to \"revise/adjust/polish/fix chapter N\", you MUST use the revise_chapter tool (pass the chapter number via the num argument). NEVER use delete_chapter / delete_chapters_from / delete_outline / reset_progress to satisfy any kind of \"edit\" request.\n")
 	sb.WriteString("2. revise_chapter can revise any chapter that has content (including confirmed early chapters); it only modifies the target chapter and never touches the others. To tweak chapter 6, call revise_chapter(num=6, feedback=specific instructions). That's it.\n")
-	sb.WriteString("3. Delete tools (delete_chapter, delete_chapters_from, delete_outline, reset_progress) are irreversible. Only use them when the user explicitly says \"delete/clear/reset\" and specifies the range. Before using one, first reply in plain text restating the exact range that will be affected (e.g. \"will clear content of chapters 6-30, 25 chapters — outlines will be preserved\") and wait for the user's explicit confirmation; then on the next turn call the tool with confirm=true. Note: delete_chapter / delete_chapters_from only clear content (Content, Summary, markdown file), keeping outlines and resetting chapter status to pending; delete_outline / reset_progress delete outlines and all data.\n")
-	sb.WriteString("4. Never widen the delete range \"for cleanliness\" or \"to make regeneration easier\". Prefer doing less to doing too much.\n")
+	sb.WriteString("3. Delete tools (delete_chapter, delete_chapters_from, delete_outline, reset_progress) are irreversible. Only use them when the user explicitly says \"delete/clear/reset\" and specifies the range. Before using one, first reply in plain text restating the exact range that will be affected (e.g. \"will clear content of chapters 6-30, 25 chapters — outlines will be preserved\") and wait for the user's explicit confirmation; then on the next turn call the tool with confirm=true. Note: delete_chapter / delete_chapters_from only clear content (Content, Summary, markdown file), keeping outline entries and **do not reduce the total chapter count**; delete_outline / reset_progress delete outlines and all data.\n")
+	sb.WriteString("4. Never widen the delete range. Exception: when the user asks to \"regenerate the outline\", \"change to N chapters\", or \"rewrite the whole outline\" and there are no confirmed chapters yet, use update_project_config + generate_outline — that is **not** a delete operation and does **not** require delete_outline first.\n")
 	sb.WriteString("5. When user intent is ambiguous, ask a clarifying question instead of guessing into a write operation.\n\n")
 
 	sb.WriteString("## Tool-selection guidance\n")
 	sb.WriteString("- Tweak chapter content -> revise_chapter(num, feedback) (AI rewrites the whole chapter)\n")
 	sb.WriteString("- Surgical edit of a chapter (replace lines/replace text/insert/append) -> edit_chapter_content(num, operation, ...) (precise edit without full rewrite; ideal for tweaking a paragraph or fixing a typo)\n")
 	sb.WriteString("- Edit a pending chapter's outline -> edit_chapter_outline(num, title, outline)\n")
-	sb.WriteString("- Give feedback on the overall outline -> revise_outline(feedback) (only touches unconfirmed chapters)\n")
+	sb.WriteString("- Give feedback on the existing outline while **keeping the same chapter count** -> revise_outline(feedback) (updates title/outline of unconfirmed chapters only; cannot add or remove chapters)\n")
+	sb.WriteString("- **Change total chapter count / regenerate the whole outline** (no confirmed chapters yet) -> ① update_project_config(chapter_count, target_words_per_chapter) ② generate_outline. generate_outline **fully replaces** all pending outlines; no delete_outline first, never use revise_outline to shrink/grow chapter count, never use delete_chapters_from\n")
 	sb.WriteString("- Generate the next chapter's prose -> generate_chapter\n")
 	sb.WriteString("- Confirmed chapters exist and the user wants to append more -> do NOT use generate_outline (it will be rejected); tell the user to use \"Generate Continuation Outline\" on the Outline page\n\n")
 
@@ -1102,7 +1108,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_project_config",
-			Description: "更新故事配置。如果存在已确认章节，会自动触发设定协调。覆盖用户已填字段需 confirm_overwrite=true。",
+			Description: "更新故事配置（含 chapter_count、target_words_per_chapter 等）。generate_outline 读取此处的章数与每章字数生成大纲；用户要「改成 N 章重新生成」时必须先调用本工具再 generate_outline。存在已确认章节时会自动触发设定协调。覆盖用户已填字段需 confirm_overwrite=true。",
 			Parameters:  `{"type": "故事类型", "title": "标题", "chapter_count": 30, "target_words_per_chapter": 2500, "writing_style": "写作风格", "writing_pov": "叙述视角", "story_synopsis": "故事梗概", "confirm_overwrite": false}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -1204,7 +1210,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "generate_outline",
-			Description: "生成小说大纲（异步）。注意：存在已确认章节时不可用（会覆盖已完成内容），追加章节请引导用户使用大纲页的「生成后续大纲」。",
+			Description: "生成小说大纲（异步）。按 config 中的 chapter_count 与 target_words_per_chapter 调用 AI，**完全替换**当前全部章节大纲（pending 阶段，无需先 delete_outline）。用户要求「重新生成」「改成 N 章」「整本重写大纲」且尚无已确认章节时：先 update_project_config 更新章数/字数，再调用本工具；禁止用 revise_outline 缩章/增章。存在已确认章节时不可用；追加章节请引导用户使用大纲页的「生成后续大纲」。",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if ctx.StartAsync == nil {
@@ -1248,7 +1254,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "revise_outline",
-			Description: "根据反馈修订大纲（异步）",
+			Description: "根据反馈修订大纲（异步）。**仅适用于章数不变**的调整（改剧情、改某章情节等）；**不能**增减章节总数。用户要缩章/增章/整本重生时，应 update_project_config + generate_outline，不要用本工具。",
 			Parameters:  `{"feedback": "修改意见"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -1273,7 +1279,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_outline",
-			Description: "【危险·不可逆】删除整个大纲及全部章节数据。仅当用户明确要求删除大纲时使用，且必须先向用户确认。严禁用于实现「修改大纲」的需求——修改请用 revise_outline 或 edit_chapter_outline。",
+			Description: "【危险·不可逆】清空整个大纲及全部章节数据。仅当用户明确要求「删除/清空大纲」且暂不需要立即重新生成时使用。用户要「删掉重生成 N 章」且无已确认章节时，直接 update_project_config + generate_outline，无需先调用本工具。严禁用于修改单章大纲/正文。",
 			Parameters:  `{"confirm": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if msg := requireConfirm(ctx, args, fmt.Sprintf("删除整个大纲（共 %d 章）", len(ctx.State.Chapters))); msg != "" {
@@ -1488,7 +1494,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_chapters_from",
-			Description: "【危险·不可逆】从指定章节到末尾清除正文内容（保留大纲）。仅当用户明确要求批量删除正文时使用，且必须先向用户复述删除范围并获得确认。严禁用于实现「修改某章」的需求——修改请用 revise_chapter。",
+			Description: "【危险·不可逆】从指定章节到末尾清除正文内容（保留大纲条目，**不减少章节总数**）。仅当用户明确要求批量删除已写正文时使用。不能用于缩章、不能用于重新生成大纲——缩章/重生请用 update_project_config + generate_outline。修改某章请用 revise_chapter。",
 			Parameters:  `{"num": 6, "confirm": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {

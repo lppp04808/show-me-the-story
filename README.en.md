@@ -128,6 +128,63 @@ For best results, use a large-context model and set "context budget" on the Conf
 
 The chat panel on the right (or the dedicated "Assistant" page) is an AI that can act on the project: read settings, change characters, adjust the outline, revise chapters, and so on through conversation. Destructive operations require the AI to confirm with you first, and chapter edits are always minimal targeted revisions rather than wholesale rewrites.
 
+#### What the assistant can do
+
+| Category | Examples |
+|----------|----------|
+| **Read** | "What's the current outline?", "Show chapter 3", "List all characters" |
+| **Settings** | Create / edit / delete characters, world entries, organizations, relations |
+| **Config** | Change genre, chapter count, words per chapter, writing style, synopsis, etc. |
+| **Outline** | Generate outline, revise by feedback (same chapter count), edit a single pending chapter outline, confirm outline |
+| **Writing** | Generate chapter, confirm chapter, revise a specific chapter, surgical paragraph edits |
+| **Foreshadows** | Suggest, create, update, delete foreshadows |
+| **Skills** | List skills, toggle skills on/off |
+
+#### Recommended for the assistant
+
+- **Bulk settings**: "Create 5 main characters from the synopsis", "Add a world entry about the magic system"
+- **Outline tweaks (same chapter count)**: "Make chapter 5 a rainy-night clue discovery", "Speed up the pace and bring the villain in earlier"
+- **Single-chapter revision**: "Chapter 8 dialogue feels stiff — make it more colloquial", "Strengthen the cliffhanger at the end of chapter 3"
+- **Surgical edits**: "Replace lines 12–15 in chapter 6 with a tenser description"
+- **Queries**: "Where am I in the story?", "Which foreshadows are still active?"
+
+#### Possible via assistant, but verify the result
+
+- **Regenerate the whole outline with a new chapter count**: e.g. "Change to 12 chapters, 3000 words each, and regenerate the full outline." The assistant should update config then generate; after it finishes, check the Outline page that you have 12 chapters numbered 1–12.
+- **Config changes after confirmed chapters**: saving may trigger settings reconciliation and regenerate pending outlines — can take a while.
+- **Async tasks**: outline/chapter generation and revision run in the background; watch the log panel and wait for the task to finish before sending the next message.
+
+#### Better done in the UI (not the assistant)
+
+| Task | Prefer |
+|------|--------|
+| **Change total chapter count / full outline regen** | Config page → set count & words → Outline page → Delete outline → Generate. If using the assistant, say explicitly "change to N chapters and regenerate the full outline", then verify the count. |
+| **Full outline regen after confirmed chapters** | `generate_outline` is rejected. Use "Generate continuation outline" on the Outline page, or start a new project. |
+| **Shrink chapter count** | Do not say "delete chapters 13–30" — `delete_chapters_from` only clears prose, not outline entries. To reduce count: update config + regenerate outline. |
+| **Full-book optimisation** | Use the Full-book optimisation panel on the Writing page. |
+| **Continue / import existing text** | Outline page → Import existing content. |
+| **Relationship graph layout** | Relations page (Canvas drag/zoom). |
+| **Reset entire project** | Dangerous; if needed, say "reset all progress" explicitly and confirm the range the assistant restates. |
+
+#### UI buttons vs assistant
+
+- **Page buttons**: generate / confirm / revise / delete — clear state, predictable; **default choice** for core workflows.
+- **Assistant**: good when you need explanation, multi-step queries, or one-sentence intent; for complex flows (chapter-count regen, full-book optimisation) prefer the UI, use the assistant as a helper.
+
+#### How to phrase requests
+
+- **Regen with new count**: "Change to 12 chapters, 3000 words each, regenerate the full outline" — clearer than "the outline is bad, redo it".
+- **Content change, same structure**: "Revise the outline: add a foreshadow in chapter 3, do not change the chapter count".
+- **Edit chapter prose**: "Revise chapter 6: …" — do not say "delete chapter 6" when you mean edit.
+- **While a task runs**: wait for the "AI thinking" badge to clear, or click Stop before sending a new command.
+
+#### Safety guards (summary)
+
+1. Editing a chapter ≠ deleting it; the assistant must not use delete tools for edits.
+2. Delete operations need your explicit confirmation after the assistant restates the scope.
+3. Fields you already filled on the Config page are not overwritten silently.
+4. Only one AI task at a time; editing is disabled while a task runs.
+
 ## Data and files
 
 Everything is local plain text / JSON:
