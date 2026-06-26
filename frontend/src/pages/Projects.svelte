@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
+  import { fetchProgressLite } from '../lib/sse.js';
   import { currentProject, projects, addToast, showConfirm, taskRunning, progress, config, settings, chatSessions, currentChatSession, projectLanguage } from '../lib/stores.js';
   import { t, setLocale } from '../lib/i18n/index.js';
 
@@ -30,7 +31,7 @@
       await api('POST', '/api/projects/select', { name });
       currentProject.set(name);
       // Reload all project data
-      try { progress.set(await api('GET', '/api/progress')); } catch (e) {}
+      try { progress.set(await fetchProgressLite()); } catch (e) {}
       try {
         const cfg = await api('GET', '/api/config');
         config.set(cfg);

@@ -48,7 +48,9 @@ func SuggestForeshadows(ctx context.Context, apiCfg *APIConfig, cfg *Config, sta
 
 	systemPrompt := SystemPromptFor(lang, "narrative_architect_json")
 
+	apiCfg.NeedJSON = true
 	rawResp := CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+	apiCfg.NeedJSON = false
 	if rawResp == "" {
 		return nil, fmt.Errorf("API 调用失败或被取消")
 	}
@@ -85,7 +87,9 @@ func UpdateForeshadows(ctx context.Context, apiCfg *APIConfig, cfg *Config, stat
 
 	systemPrompt := SystemPromptFor(lang, "foreshadow_tracker_json")
 
+	apiCfg.NeedJSON = true
 	rawResp := CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+	apiCfg.NeedJSON = false
 	if rawResp == "" {
 		return fmt.Errorf("API 调用失败或被取消")
 	}

@@ -75,6 +75,7 @@ func purgeMemoryForChapter(state *Progress, chapterNum int) {
 func clearChapterContentAt(state *Progress, projectDir string, idx int) {
 	ch := &state.Chapters[idx]
 	deleteFile(ChapterMarkdownPath(projectDir, ch.Num))
+	deleteFile(ChapterContentPath(projectDir, ch.Num))
 	ch.Content = ""
 	ch.Summary = ""
 	ch.Status = StatusPending

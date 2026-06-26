@@ -12,12 +12,17 @@ import (
 	"time"
 )
 
+type responseFormat struct {
+	Type string `json:"type,omitempty"`
+}
+
 type ChatRequest struct {
-	Model         string         `json:"model"`
-	Messages      []Message      `json:"messages"`
-	Stream        bool           `json:"stream,omitempty"`
-	StreamOptions *streamOptions `json:"stream_options,omitempty"`
-	MaxTokens     int            `json:"max_tokens,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []Message       `json:"messages"`
+	Stream         bool            `json:"stream,omitempty"`
+	StreamOptions  *streamOptions  `json:"stream_options,omitempty"`
+	MaxTokens      int             `json:"max_tokens,omitempty"`
+	ResponseFormat *responseFormat `json:"response_format,omitempty"`
 }
 
 type streamOptions struct {
@@ -141,26 +146,12 @@ func CallAPI(ctx context.Context, apiCfg *APIConfig, system, user string) (strin
 }
 
 // CallAPIMessages 以完整的多轮消息数组调用 API。
-// 内部优先走流式并缓冲全文，使 token 计数在等待期间也能更新；流式不可用时回退同步请求。
+// 默认按配置决定是否走流式；关闭流式时直接走同步请求。
 func CallAPIMessages(ctx context.Context, apiCfg *APIConfig, messages []Message) (string, error) {
-	result, err := CallAPIStreamMessages(ctx, apiCfg, messages, nil)
-	if err == nil && result != "" {
-		return result, nil
+	if apiCfg == nil || !apiCfg.UseStream {
+		return callAPIMessagesSync(ctx, apiCfg, messages)
 	}
-	if ctx.Err() != nil {
-		if result != "" {
-			return result, ctx.Err()
-		}
-		return "", ctx.Err()
-	}
-	if result != "" {
-		return result, err
-	}
-	if err != nil && isFatalAPIError(err) {
-		return "", err
-	}
-	// ponytail: fallback for providers with broken stream; loses in-flight stream estimate only.
-	return callAPIMessagesSync(ctx, apiCfg, messages)
+	return CallAPIStreamMessages(ctx, apiCfg, messages, nil)
 }
 
 // callAPIMessagesSync 同步 HTTP 调用（仅作流式失败时的回退）。
@@ -173,6 +164,14 @@ func callAPIMessagesSync(ctx context.Context, apiCfg *APIConfig, messages []Mess
 		Model:     apiCfg.Model,
 		Messages:  messages,
 		MaxTokens: apiCfg.MaxTokens,
+	}
+
+	if apiCfg.ResponseFormat && apiCfg.NeedJSON {
+		rf := responseFormat{
+			Type: "json_object",
+		}
+
+		reqBody.ResponseFormat = &rf
 	}
 
 	bts, err := json.Marshal(reqBody)
@@ -288,17 +287,25 @@ func getWaitTime(retry int) int {
 type streamDelta struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content          string `json:"content,omitempty"`
+			ReasoningContent string `json:"reasoning_content,omitempty"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *tokenUsage `json:"usage,omitempty"`
 }
 
 func CallAPIStream(ctx context.Context, apiCfg *APIConfig, system, user string, onChunk func(string)) (string, error) {
+	if !shouldUseStream(apiCfg) {
+		return CallAPI(ctx, apiCfg, system, user)
+	}
 	return CallAPIStreamMessages(ctx, apiCfg, []Message{
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
 	}, onChunk)
+}
+
+func shouldUseStream(apiCfg *APIConfig) bool {
+	return apiCfg != nil && apiCfg.UseStream
 }
 
 // CallAPIStreamMessages 以完整的多轮消息数组调用 API（流式）。
@@ -308,11 +315,19 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *APIConfig, messages []Me
 	tracker.beginCall(messages)
 
 	reqBody := ChatRequest{
-		Model:    apiCfg.Model,
-		Messages: messages,
-		Stream:   true,
+		Model:         apiCfg.Model,
+		Messages:      messages,
+		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
-		MaxTokens: apiCfg.MaxTokens,
+		MaxTokens:     apiCfg.MaxTokens,
+	}
+
+	if apiCfg.ResponseFormat && apiCfg.NeedJSON {
+		rf := responseFormat{
+			Type: "json_object",
+		}
+
+		reqBody.ResponseFormat = &rf
 	}
 
 	bts, err := json.Marshal(reqBody)
@@ -346,6 +361,7 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *APIConfig, messages []Me
 	var fullContent strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
 	var streamUsage *tokenUsage
+	gotDone := false
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
@@ -356,7 +372,9 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *APIConfig, messages []Me
 			continue
 		}
 		data := strings.TrimPrefix(line, "data: ")
+		//fmt.Println(data)
 		if data == "[DONE]" {
+			gotDone = true
 			break
 		}
 
@@ -369,6 +387,7 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *APIConfig, messages []Me
 		}
 		if len(delta.Choices) > 0 && delta.Choices[0].Delta.Content != "" {
 			chunk := delta.Choices[0].Delta.Content
+
 			fullContent.WriteString(chunk)
 			if tracker != nil {
 				tracker.updateStreamContent(fullContent.String())
@@ -378,8 +397,18 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *APIConfig, messages []Me
 			}
 		}
 	}
+	if err = scanner.Err(); err != nil {
+		return fullContent.String(), err
+	}
 
 	result := fullContent.String()
+	//fmt.Println(result)
+	if !gotDone {
+		if result == "" {
+			return "", fmt.Errorf("流式响应未完整结束")
+		}
+		return result, fmt.Errorf("流式响应中断，缺少 [DONE]")
+	}
 	if result == "" {
 		return "", fmt.Errorf("流式响应为空")
 	}

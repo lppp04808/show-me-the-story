@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -20,6 +21,15 @@ type OutlineChapter struct {
 	Outline string `json:"outline"`
 }
 
+type outlineAPICallFunc func(ctx context.Context, apiCfg *APIConfig, systemPrompt, userPrompt string, logger *LogBroadcaster) string
+
+var outlineAPICall outlineAPICallFunc = func(ctx context.Context, apiCfg *APIConfig, systemPrompt, userPrompt string, logger *LogBroadcaster) string {
+	if logger != nil {
+		return CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+	}
+	return CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
+}
+
 func parseOutlineResponse(rawResp string) (*OutlineResponse, error) {
 	rawResp = cleanJSONResponse(rawResp)
 	var resp OutlineResponse
@@ -29,47 +39,204 @@ func parseOutlineResponse(rawResp string) (*OutlineResponse, error) {
 	return &resp, nil
 }
 
-func generateOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, settings *ProjectSettings, logger *LogBroadcaster) (*OutlineResponse, error) {
-	chapterCountStr := fmt.Sprintf("%d", cfg.Story.ChapterCount)
+func generateOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, settings *ProjectSettings, logger *LogBroadcaster, checkpointPath string) (*OutlineResponse, error) {
+	totalChapters := cfg.Story.ChapterCount
+	if totalChapters <= 0 {
+		totalChapters = 1
+	}
+	batchSize := outlineBatchSizeDefault
+	fingerprint := BuildInitialOutlineFingerprint(cfg, settings)
+
+	var result *OutlineResponse
+	cp, err := LoadOutlineCheckpoint(checkpointPath)
+	if err != nil {
+		return nil, err
+	}
+	if ValidateOutlineCheckpoint(cp, cfg, nil, settings) && cp.Mode == outlineCheckpointModeInitial && len(cp.CompletedChapters) > 0 {
+		result = &OutlineResponse{
+			Title:         cp.Title,
+			CorePrompt:    cp.CorePrompt,
+			StorySynopsis: cp.StorySynopsis,
+			Chapters:      cloneOutlineChapters(cp.CompletedChapters),
+		}
+		if cp.CurrentBatchSize > 0 {
+			batchSize = cp.CurrentBatchSize
+		}
+		if logger != nil {
+			logger.InfoBilingual(
+				fmt.Sprintf("检测到未完成的大纲断点，已恢复前 %d/%d 章，将从第 %d 章继续。", len(result.Chapters), totalChapters, cp.NextStartNum),
+				fmt.Sprintf("Recovered unfinished outline checkpoint: %d/%d chapters restored; resuming from chapter %d.", len(result.Chapters), totalChapters, cp.NextStartNum),
+			)
+		}
+	} else {
+		_ = DeleteOutlineCheckpoint(checkpointPath)
+	}
+
+	if result == nil {
+		firstBatch, err := generateOutlineFirstBatch(ctx, apiCfg, cfg, settings, batchSize, totalChapters, logger)
+		if err != nil {
+			if errors.Is(err, errOutlineBatchMalformed) {
+				if logger != nil {
+					logger.Warn(formatOutlineBatchReduceLog(1, min(batchSize, totalChapters), cfg.Language))
+				}
+				batchSize = outlineBatchSizeReduced
+				firstBatch, err = generateOutlineFirstBatch(ctx, apiCfg, cfg, settings, batchSize, totalChapters, logger)
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		result = &OutlineResponse{
+			Title:         firstBatch.Title,
+			CorePrompt:    firstBatch.CorePrompt,
+			StorySynopsis: firstBatch.StorySynopsis,
+			Chapters:      append([]OutlineChapter(nil), firstBatch.Chapters...),
+		}
+		if err := SaveOutlineCheckpoint(checkpointPath, &OutlineCheckpoint{
+			Mode:              outlineCheckpointModeInitial,
+			Fingerprint:       fingerprint,
+			Title:             result.Title,
+			CorePrompt:        result.CorePrompt,
+			StorySynopsis:     result.StorySynopsis,
+			TotalChapters:     totalChapters,
+			NextStartNum:      len(result.Chapters) + 1,
+			CurrentBatchSize:  batchSize,
+			CompletedChapters: cloneOutlineChapters(result.Chapters),
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(result.Chapters) >= totalChapters {
+		result.Chapters = result.Chapters[:totalChapters]
+		_ = DeleteOutlineCheckpoint(checkpointPath)
+		return result, nil
+	}
+
+	for startNum := len(result.Chapters) + 1; startNum <= totalChapters; {
+		remaining := totalChapters - startNum + 1
+		currentBatchSize := batchSize
+		if remaining < currentBatchSize {
+			currentBatchSize = remaining
+		}
+		if logger != nil {
+			logger.Info(formatOutlineBatchProgress(startNum, currentBatchSize, len(result.Chapters), totalChapters, cfg.Language))
+		}
+		chapters, err := generateOutlineChaptersOnly(ctx, apiCfg, cfg, settings, cfg.Prompts.ContinuationOutlineGeneration, map[string]string{
+			"Title":             result.Title,
+			"StoryType":         cfg.Story.Type,
+			"CorePrompt":        result.CorePrompt,
+			"StorySynopsis":     result.StorySynopsis,
+			"WritingStyle":      cfg.Story.WritingStyle,
+			"WritingPOV":        cfg.Story.WritingPOV,
+			"ExistingOutline":   formatOutlineContext(result.Chapters, cfg.Language),
+			"NewChapterCount":   fmt.Sprintf("%d", currentBatchSize),
+			"StartNum":          fmt.Sprintf("%d", startNum),
+			"TotalChapterCount": fmt.Sprintf("%d", totalChapters),
+		}, logger)
+		if err != nil {
+			if errors.Is(err, errOutlineBatchMalformed) && batchSize > outlineBatchSizeReduced && currentBatchSize > outlineBatchSizeReduced {
+				if logger != nil {
+					logger.Warn(formatOutlineBatchReduceLog(startNum, currentBatchSize, cfg.Language))
+				}
+				batchSize = outlineBatchSizeReduced
+				if saveErr := SaveOutlineCheckpoint(checkpointPath, &OutlineCheckpoint{
+					Mode:              outlineCheckpointModeInitial,
+					Fingerprint:       fingerprint,
+					Title:             result.Title,
+					CorePrompt:        result.CorePrompt,
+					StorySynopsis:     result.StorySynopsis,
+					TotalChapters:     totalChapters,
+					NextStartNum:      startNum,
+					CurrentBatchSize:  batchSize,
+					CompletedChapters: cloneOutlineChapters(result.Chapters),
+				}); saveErr != nil {
+					return nil, saveErr
+				}
+				continue
+			}
+			return nil, err
+		}
+		result.Chapters = append(result.Chapters, chapters...)
+		if logger != nil {
+			logger.Info(formatOutlineBatchDone(startNum, len(chapters), len(result.Chapters), totalChapters, cfg.Language))
+		}
+		if err := SaveOutlineCheckpoint(checkpointPath, &OutlineCheckpoint{
+			Mode:              outlineCheckpointModeInitial,
+			Fingerprint:       fingerprint,
+			Title:             result.Title,
+			CorePrompt:        result.CorePrompt,
+			StorySynopsis:     result.StorySynopsis,
+			TotalChapters:     totalChapters,
+			NextStartNum:      len(result.Chapters) + 1,
+			CurrentBatchSize:  batchSize,
+			CompletedChapters: cloneOutlineChapters(result.Chapters),
+		}); err != nil {
+			return nil, err
+		}
+		startNum += len(chapters)
+	}
+
+	_ = DeleteOutlineCheckpoint(checkpointPath)
+	return result, nil
+}
+
+func generateOutlineFirstBatch(ctx context.Context, apiCfg *APIConfig, cfg *Config, settings *ProjectSettings, batchSize int, totalChapters int, logger *LogBroadcaster) (*OutlineResponse, error) {
+	batchCount := min(batchSize, totalChapters)
+	chapterCountStr := fmt.Sprintf("%d", totalChapters)
 	targetWordsStr := fmt.Sprintf("%d", cfg.Story.TargetWordsPerChapter)
 	data := mergeOutlinePromptData(map[string]string{
-		"StoryType":     cfg.Story.Type,
-		"ChapterCount":  chapterCountStr,
-		"TargetWords":   targetWordsStr,
-		"WritingStyle":  cfg.Story.WritingStyle,
-		"WritingPOV":    cfg.Story.WritingPOV,
-		"StorySynopsis": cfg.Story.StorySynopsis,
+		"StoryType":         cfg.Story.Type,
+		"ChapterCount":      chapterCountStr,
+		"TargetWords":       targetWordsStr,
+		"WritingStyle":      cfg.Story.WritingStyle,
+		"WritingPOV":        cfg.Story.WritingPOV,
+		"StorySynopsis":     cfg.Story.StorySynopsis,
+		"BatchStart":        "1",
+		"BatchCount":        fmt.Sprintf("%d", batchCount),
+		"BatchEnd":          fmt.Sprintf("%d", batchCount),
+		"TotalChapterCount": chapterCountStr,
 	}, cfg, settings)
 
 	systemPrompt := SystemPromptFor(cfg.Language, "outline_editor_json")
 	minLen, _ := calcOutlineLengthRange(cfg.Story.TargetWordsPerChapter)
+	batchHint := buildOutlineBatchHint(1, batchCount, totalChapters, cfg.Language)
 
 	var lastResp *OutlineResponse
 	var lastShort []int
 	for attempt := 0; attempt < outlineGenMaxAttempts; attempt++ {
+		if logger != nil {
+			logger.Info(formatOutlineBatchProgress(1, batchCount, 0, totalChapters, cfg.Language))
+		}
 		userPrompt := finalizeOutlinePrompt(cfg.Prompts.OutlineGeneration,
-			RenderPrompt(cfg.Prompts.OutlineGeneration, data), cfg, settings)
+			RenderPrompt(cfg.Prompts.OutlineGeneration, data), cfg, settings, batchHint)
 		if attempt > 0 {
+			if logger != nil {
+				logger.Info(formatOutlineBatchProgress(1, batchCount, 0, totalChapters, cfg.Language))
+			}
 			userPrompt += formatShortOutlineRetryFeedback(lastShort, minLen, cfg.Language)
 		}
 
 		var rawResp string
-		if logger != nil {
-			rawResp = CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
-		} else {
-			rawResp = CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
-		}
+		rawResp = outlineAPICall(ctx, apiCfg, systemPrompt, userPrompt, logger)
 		if rawResp == "" {
 			return nil, fmt.Errorf("API 调用失败或被取消")
 		}
 
 		resp, err := parseOutlineResponse(rawResp)
 		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errOutlineBatchMalformed, err)
+		}
+		if err = validateOutlineBatch(resp.Chapters, 1, batchCount); err != nil {
 			return nil, err
 		}
 		lastResp = resp
 		lastShort = validateOutlineChapterLengths(resp.Chapters, minLen)
 		if len(lastShort) == 0 {
+			if logger != nil {
+				logger.Info(formatOutlineBatchDone(1, len(resp.Chapters), len(resp.Chapters), totalChapters, cfg.Language))
+			}
 			return resp, nil
 		}
 		if logger != nil {
@@ -95,16 +262,23 @@ func generateOutlineChaptersOnly(ctx context.Context, apiCfg *APIConfig, cfg *Co
 	data := mergeOutlinePromptData(baseData, cfg, settings)
 	systemPrompt := SystemPromptFor(cfg.Language, "outline_editor_json")
 	minLen, _ := calcOutlineLengthRange(cfg.Story.TargetWordsPerChapter)
+	startNum, batchCount, totalChapterCount := parseOutlineBatchMeta(baseData)
+	batchHint := buildOutlineBatchHint(startNum, batchCount, totalChapterCount, cfg.Language)
 
 	var lastChapters []OutlineChapter
 	var lastShort []int
 	for attempt := 0; attempt < outlineGenMaxAttempts; attempt++ {
-		userPrompt := finalizeOutlinePrompt(template, RenderPrompt(template, data), cfg, settings)
+		userPrompt := finalizeOutlinePrompt(template, RenderPrompt(template, data), cfg, settings, batchHint)
 		if attempt > 0 {
+			if logger != nil && batchCount > 0 {
+				logger.Info(formatOutlineBatchProgress(startNum, batchCount, startNum-1, totalChapterCount, cfg.Language))
+			}
 			userPrompt += formatShortOutlineRetryFeedback(lastShort, minLen, cfg.Language)
 		}
 
-		rawResp := CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+		apiCfg.NeedJSON = true
+		rawResp := outlineAPICall(ctx, apiCfg, systemPrompt, userPrompt, logger)
+		apiCfg.NeedJSON = false
 		if rawResp == "" {
 			return nil, fmt.Errorf("API 调用失败或被取消")
 		}
@@ -114,7 +288,10 @@ func generateOutlineChaptersOnly(ctx context.Context, apiCfg *APIConfig, cfg *Co
 		}
 		rawResp = cleanJSONResponse(rawResp)
 		if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-			return nil, fmt.Errorf("解析大纲JSON失败: %w\n原始响应: %s", err, rawResp)
+			return nil, fmt.Errorf("%w: 解析大纲JSON失败: %v\n原始响应: %s", errOutlineBatchMalformed, err, rawResp)
+		}
+		if err := validateOutlineBatch(resp.Chapters, startNum, batchCount); err != nil {
+			return nil, err
 		}
 		lastChapters = resp.Chapters
 		lastShort = validateOutlineChapterLengths(resp.Chapters, minLen)
@@ -166,7 +343,7 @@ func reviseOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *P
 	var lastShort []int
 	for attempt := 0; attempt < outlineGenMaxAttempts; attempt++ {
 		userPrompt := finalizeOutlinePrompt(cfg.Prompts.OutlineRevision,
-			RenderPrompt(cfg.Prompts.OutlineRevision, data), cfg, settings)
+			RenderPrompt(cfg.Prompts.OutlineRevision, data), cfg, settings, "")
 		if attempt > 0 {
 			userPrompt += formatShortOutlineRetryFeedback(lastShort, minLen, lang)
 		}
@@ -234,9 +411,16 @@ func cleanJSONResponse(s string) string {
 }
 
 func GenerateOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, settings *ProjectSettings, progressPath, cfgPath string, logger *LogBroadcaster) error {
-	if err := validateAPIConfig(apiCfg); err != nil {
+	var err error
+	if err = validateAPIConfig(apiCfg); err != nil {
 		return err
 	}
+	checkpointPath := OutlineCheckpointPath(progressPath)
+	defer func() {
+		if err == nil && ctx.Err() == nil {
+			_ = DeleteOutlineCheckpoint(checkpointPath)
+		}
+	}()
 	for _, ch := range state.Chapters {
 		if ch.Status == StatusAccepted {
 			return fmt.Errorf("存在已确认章节，无法整体重新生成大纲（会覆盖已完成内容）。如需追加章节请使用「生成后续大纲」")
@@ -245,7 +429,13 @@ func GenerateOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 
 	logger.StepInfo(1, 2, "正在调用 AI 生成大纲...")
 
-	outlineResp, err := generateOutline(ctx, apiCfg, cfg, settings, logger)
+	var outlineResp *OutlineResponse
+
+	apiCfg.NeedJSON = true
+
+	outlineResp, err = generateOutline(ctx, apiCfg, cfg, settings, logger, checkpointPath)
+
+	apiCfg.NeedJSON = false
 	if err != nil {
 		return fmt.Errorf("生成大纲失败: %w", err)
 	}
@@ -262,14 +452,14 @@ func GenerateOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 		}
 	}
 
-	if err := applyOutlineMetaWithGuard(cfg, state, *outlineResp, "outline_generation", PendingConfigChangesPath(progressPath), cfgPath, logger); err != nil {
+	if err = applyOutlineMetaWithGuard(cfg, state, *outlineResp, "outline_generation", PendingConfigChangesPath(progressPath), cfgPath, logger); err != nil {
 		return err
 	}
 
 	snapshot := cfg.Story
 	state.StoryConfigSnapshot = &snapshot
 
-	if err := SaveProgress(progressPath, state); err != nil {
+	if err = SaveProgress(progressPath, state); err != nil {
 		return fmt.Errorf("保存进度失败: %w", err)
 	}
 

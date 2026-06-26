@@ -35,8 +35,8 @@
   $: cfgKey = $apiConfig?.api_key || '';
   $: cfgTimeout = $apiConfig?.http_timeout_seconds || 300;
 
-  let localApiCfg = { base_url: '', model: '', api_key: '', http_timeout_seconds: 300, max_tokens: 0, context_budget_tokens: 900000 };
-  let localStoryCfg = { type: '', title: '', chapter_count: 30, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', story_synopsis: '' };
+  let localApiCfg = { base_url: '', model: '', api_key: '', http_timeout_seconds: 300, max_tokens: 0, context_budget_tokens: 900000, use_stream: true };
+  let localStoryCfg = { type: '', title: '', chapter_count: 30, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', story_synopsis: '', critic_enabled: false, critic_model: 'claude-haiku-4-5' };
   let testingApi = false;
 
   let apiCfgSnapshot = '';
@@ -131,6 +131,8 @@
       ...localStoryCfg,
       chapter_count: Number(localStoryCfg.chapter_count) || 30,
       target_words_per_chapter: Number(localStoryCfg.target_words_per_chapter) || 2500,
+      critic_enabled: !!localStoryCfg.critic_enabled,
+      critic_model: (localStoryCfg.critic_model || '').trim() || 'claude-haiku-4-5',
     };
     const settingsChanged =
       story.type !== prev.type ||
@@ -390,6 +392,23 @@
             <input type="number" class="input input-sm w-full" bind:value={localApiCfg.context_budget_tokens} placeholder="900000" disabled={$taskRunning || testingApi} title={$t('config.api.budget.tooltip')} />
           </div>
           <div class="col-span-2">
+            <label class="label cursor-pointer justify-start gap-3 px-0">
+              <input type="checkbox" class="checkbox checkbox-sm" bind:checked={localApiCfg.use_stream} disabled={$taskRunning || testingApi} />
+              <div>
+                <span class="text-xs text-base-content/80 block">{$t('config.api.useStream')}</span>
+                <span class="text-[11px] text-base-content/50 block">{$t('config.api.useStream.tooltip')}</span>
+              </div>
+            </label>
+          </div>
+          <div class="col-span-2">
+              <label class="label cursor-pointer justify-start gap-3 px-0">
+                <input type="checkbox" class="checkbox checkbox-sm" bind:checked={localApiCfg.response_format} disabled={$taskRunning || testingApi} />
+                <div>
+                  <span class="text-xs text-base-content/80 block">{$t('config.api.responseFormat')}</span>
+                </div>
+              </label>
+            </div>
+          <div class="col-span-2">
             <span class="text-xs text-base-content/50 mb-0.5 block">{$t('config.api.key')}</span>
             <input type="password" class="input input-sm w-full" bind:value={localApiCfg.api_key} placeholder="sk-..." disabled={$taskRunning || testingApi} />
           </div>
@@ -416,6 +435,9 @@
           </div>
         {/if}
         <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
+          <div class="col-span-2">
+            <span class="text-[11px] text-base-content/50 block">{$t('config.story.outlineBatchingHint')}</span>
+          </div>
           <div>
             <span class="text-xs text-base-content/50 mb-0.5 block">{$t('config.story.type')}</span>
             <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.type} placeholder={$t('config.story.type.placeholder')} disabled={$taskRunning} />
@@ -431,6 +453,17 @@
           <div>
             <span class="text-xs text-base-content/50 mb-0.5 block">{$t('config.story.targetWords')}</span>
             <input type="number" class="input input-sm w-full" bind:value={localStoryCfg.target_words_per_chapter} disabled={$taskRunning} />
+          </div>
+          <div class="col-span-2 mt-1">
+            <div class="text-xs text-base-content/50 mb-1">{$t('config.story.criticTitle')}</div>
+            <label class="flex items-start gap-3 bg-base-300 rounded-lg px-3 py-2 cursor-pointer">
+              <input type="checkbox" class="toggle toggle-primary toggle-sm mt-0.5" bind:checked={localStoryCfg.critic_enabled} disabled={$taskRunning} />
+              <span class="text-sm leading-5">{$t('config.story.criticEnabledHint')}</span>
+            </label>
+          </div>
+          <div class="col-span-2">
+            <span class="text-xs text-base-content/50 mb-0.5 block">{$t('config.story.criticModel')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.critic_model} placeholder={$t('config.story.criticModel.placeholder')} disabled={$taskRunning || !localStoryCfg.critic_enabled} />
           </div>
         </div>
         <div class="flex justify-end">

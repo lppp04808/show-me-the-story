@@ -87,28 +87,70 @@ func buildPreviousChapterTailForLang(state *Progress, idx int, lang string) stri
 }
 
 func buildHistorySummaryForLang(state *Progress, idx int, lang string) string {
+	history, _, _ := buildHistoryContextForLang(state, idx, lang)
+	return history
+}
+
+func buildHistoryContextForLang(state *Progress, idx int, lang string) (string, int, int) {
 	startIdx := 0
 	if idx > 5 {
 		startIdx = idx - 5
 	}
-	var history string
+	var history strings.Builder
+	recentCount := 0
 	for i := startIdx; i < idx; i++ {
 		if state.Chapters[i].Summary != "" {
 			if NormalizeLanguage(lang) == LangEN {
-				history += fmt.Sprintf("[Chapter %d summary]: %s\n", state.Chapters[i].Num, state.Chapters[i].Summary)
+				history.WriteString(fmt.Sprintf("[Chapter %d summary]: %s\n", state.Chapters[i].Num, state.Chapters[i].Summary))
 			} else {
-				history += fmt.Sprintf("[第%d章摘要]: %s\n", state.Chapters[i].Num, state.Chapters[i].Summary)
+				history.WriteString(fmt.Sprintf("[第%d章摘要]: %s\n", state.Chapters[i].Num, state.Chapters[i].Summary))
 			}
+			recentCount++
 		}
 	}
-	if history == "" {
+	stageBlock, stageCount := buildStageSummaryContextForLang(state, idx, lang)
+	if stageBlock != "" {
+		history.WriteString("\n")
+		history.WriteString(stageBlock)
+	}
+	if history.Len() == 0 {
 		if NormalizeLanguage(lang) == LangEN {
-			history = "This is the opening of the story; no prior context."
+			return "This is the opening of the story; no prior context.", 0, 0
+		}
+		return "当前为故事开端，无历史前情。", 0, 0
+	}
+	return history.String(), recentCount, stageCount
+}
+
+func buildStageSummaryContextForLang(state *Progress, idx int, lang string) (string, int) {
+	if len(state.StageSummaries) == 0 || idx <= 0 {
+		return "", 0
+	}
+	currentChapterNum := state.Chapters[idx].Num
+	var sb strings.Builder
+	added := 0
+	for i := len(state.StageSummaries) - 1; i >= 0; i-- {
+		ss := state.StageSummaries[i]
+		if ss.EndChapter >= currentChapterNum {
+			continue
+		}
+		if NormalizeLanguage(lang) == LangEN {
+			sb.WriteString(fmt.Sprintf("[Stage summary Ch.%d-%d]: %s\n", ss.StartChapter, ss.EndChapter, ss.Summary))
 		} else {
-			history = "当前为故事开端，无历史前情。"
+			sb.WriteString(fmt.Sprintf("[阶段摘要 第%d-%d章]: %s\n", ss.StartChapter, ss.EndChapter, ss.Summary))
+		}
+		added++
+		if added >= 2 {
+			break
 		}
 	}
-	return history
+	if sb.Len() == 0 {
+		return "", 0
+	}
+	if NormalizeLanguage(lang) == LangEN {
+		return "[Stage context — medium-range story progression]\n" + sb.String(), added
+	}
+	return "【阶段上下文——中程剧情推进】\n" + sb.String(), added
 }
 
 // buildCharacterContextForLang returns structured character details injected into writing prompts.
@@ -222,8 +264,14 @@ func buildWorldviewContextForLang(settings *ProjectSettings, chapterOutline, lan
 
 // buildMemoryForLang renders the memory block for injection into writing/fact-check prompts.
 func buildMemoryForLang(state *Progress, idx int, lang string) string {
-	if len(state.MemoryEntries) == 0 {
-		return ""
+	block, _, _ := buildMemoryContextForLang(state, idx, lang)
+	return block
+}
+
+func buildMemoryContextForLang(state *Progress, idx int, lang string) (string, int, int) {
+	selected := selectRelevantMemories(state, idx)
+	if len(selected) == 0 {
+		return "", 0, len(state.MemoryEntries)
 	}
 	en := NormalizeLanguage(lang) == LangEN
 	var sb strings.Builder
@@ -232,7 +280,7 @@ func buildMemoryForLang(state *Progress, idx int, lang string) string {
 	} else {
 		sb.WriteString("【叙事记忆——早期章节的关键叙事细节】\n")
 	}
-	for _, m := range state.MemoryEntries {
+	for _, m := range selected {
 		snippet := extractSnippet(state, m.Chapter, m.Position, 100)
 		if snippet != "" {
 			if en {
@@ -248,7 +296,97 @@ func buildMemoryForLang(state *Progress, idx int, lang string) string {
 			}
 		}
 	}
-	return sb.String()
+	return sb.String(), len(selected), len(state.MemoryEntries)
+}
+
+func selectRelevantMemories(state *Progress, idx int) []MemoryEntry {
+	if len(state.MemoryEntries) == 0 {
+		return nil
+	}
+	chapterNum := 0
+	outline := ""
+	if idx >= 0 && idx < len(state.Chapters) {
+		chapterNum = state.Chapters[idx].Num
+		outline = state.Chapters[idx].Outline
+	}
+	keywords := memoryKeywords(outline)
+	var strong, recent, backlog []MemoryEntry
+	seen := make(map[int]bool)
+	for _, m := range state.MemoryEntries {
+		if keywordHit(m, keywords) {
+			strong = append(strong, m)
+			seen[m.ID] = true
+			continue
+		}
+		if chapterNum > 0 && chapterNum-m.Chapter <= 20 && chapterNum-m.Chapter > 0 {
+			recent = append(recent, m)
+			seen[m.ID] = true
+			continue
+		}
+		switch m.Category {
+		case "promise", "event", "item":
+			backlog = append(backlog, m)
+		}
+	}
+	limit := 12
+	selected := append([]MemoryEntry(nil), strong...)
+	for _, bucket := range [][]MemoryEntry{recent, backlog} {
+		for _, m := range bucket {
+			if len(selected) >= limit {
+				break
+			}
+			if seen[m.ID] && !keywordHit(m, keywords) && chapterNum > 0 && chapterNum-m.Chapter > 20 {
+				continue
+			}
+			selected = append(selected, m)
+			seen[m.ID] = true
+		}
+		if len(selected) >= limit {
+			break
+		}
+	}
+	if len(selected) == 0 {
+		if len(state.MemoryEntries) <= limit {
+			return append([]MemoryEntry(nil), state.MemoryEntries...)
+		}
+		return append([]MemoryEntry(nil), state.MemoryEntries[len(state.MemoryEntries)-limit:]...)
+	}
+	return selected
+}
+
+func memoryKeywords(outline string) []string {
+	outline = strings.TrimSpace(outline)
+	if outline == "" {
+		return nil
+	}
+	replacer := strings.NewReplacer("，", " ", "。", " ", "：", " ", ":", " ", "、", " ", "（", " ", "）", " ", "\n", " ", "\t", " ")
+	parts := strings.Fields(replacer.Replace(outline))
+	seen := make(map[string]bool)
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(stripNameMarks(p))
+		if len([]rune(p)) < 2 || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+		if len(out) >= 12 {
+			break
+		}
+	}
+	return out
+}
+
+func keywordHit(m MemoryEntry, keywords []string) bool {
+	if len(keywords) == 0 {
+		return false
+	}
+	for _, kw := range keywords {
+		if strings.Contains(m.Content, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractSnippet extracts approximately maxRunes characters from the chapter content

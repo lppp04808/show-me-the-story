@@ -74,6 +74,6 @@ export const outlineCharacterShowSuggestions = writable(false);
 export const pendingConfigChanges = writable([]);
 export const showConfigChangePanel = writable(false);
 
-export function showConfirm(message, onConfirm) {
-  confirmModal.set({ message, onConfirm });
+export function showConfirm(message, onConfirm, options = {}) {
+  confirmModal.set({ message, onConfirm, ...options });
 }

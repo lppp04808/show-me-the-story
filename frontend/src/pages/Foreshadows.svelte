@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
+  import { fetchProgressLite } from '../lib/sse.js';
   import {
     progress, taskRunning, addToast, showConfirm,
     foreshadowSuggestions, foreshadowShowSuggestions
@@ -99,7 +100,7 @@
 
   async function refreshProgress() {
     try {
-      progress.set(await api('GET', '/api/progress'));
+      progress.set(await fetchProgressLite());
     } catch (e) {}
   }
 

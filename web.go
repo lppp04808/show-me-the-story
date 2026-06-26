@@ -48,9 +48,13 @@ func startWebServer(apiCfg *APIConfig, apiCfgPath string, cfg *Config, state *Pr
 	mux.HandleFunc("POST /api/config/apply-changes", h.PostApplyConfigChanges)
 	mux.HandleFunc("DELETE /api/config/pending-changes", h.DeletePendingConfigChanges)
 	mux.HandleFunc("GET /api/progress", h.GetProgress)
+	mux.HandleFunc("GET /api/progress-lite", h.GetProgressLite)
+	mux.HandleFunc("GET /api/chapters/{num}", h.GetChapter)
 	mux.HandleFunc("DELETE /api/progress", h.DeleteProgress)
 	mux.HandleFunc("GET /api/status", h.GetStatus)
 
+	mux.HandleFunc("GET /api/outline/checkpoint", h.GetOutlineCheckpoint)
+	mux.HandleFunc("DELETE /api/outline/checkpoint", h.DeleteOutlineCheckpoint)
 	mux.HandleFunc("POST /api/outline/generate", h.PostOutlineGenerate)
 	mux.HandleFunc("POST /api/outline/confirm", h.PostOutlineConfirm)
 	mux.HandleFunc("POST /api/outline/revise", h.PostOutlineRevise)

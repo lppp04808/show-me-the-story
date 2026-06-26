@@ -1,13 +1,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 )
 
-const outlineGenMaxAttempts = 2
+const (
+	outlineGenMaxAttempts   = 2
+	outlineBatchSizeDefault = 20
+	outlineBatchSizeReduced = 10
+)
+
+var errOutlineBatchMalformed = errors.New("outline batch malformed")
 
 // calcOutlineLengthRange returns recommended per-chapter outline length bounds (characters)
 // scaled to planned chapter prose length. ponytail: linear heuristic; tune divisors if field feels too short/long.
@@ -117,7 +124,7 @@ func mergeOutlinePromptData(base map[string]string, cfg *Config, settings *Proje
 	return merged
 }
 
-func finalizeOutlinePrompt(template, rendered string, cfg *Config, settings *ProjectSettings) string {
+func finalizeOutlinePrompt(template, rendered string, cfg *Config, settings *ProjectSettings, batchHint string) string {
 	lang := cfg.Language
 	minLen, maxLen := calcOutlineLengthRange(cfg.Story.TargetWordsPerChapter)
 	rendered = appendIfMissingPlaceholder(template, rendered, "{{.CharacterList}}", formatCharacterListForOutline(settings, lang))
@@ -125,7 +132,121 @@ func finalizeOutlinePrompt(template, rendered string, cfg *Config, settings *Pro
 		block := formatOutlineLengthRequirementBlock(minLen, maxLen, lang) + "\n" + formatOutlineStructureRequirementBlock(lang)
 		rendered += "\n\n" + block
 	}
+	if strings.TrimSpace(batchHint) != "" {
+		rendered += "\n\n" + strings.TrimSpace(batchHint)
+	}
 	return rendered
+}
+
+func buildOutlineBatchHint(startNum, batchCount, totalChapterCount int, lang string) string {
+	if batchCount <= 0 || totalChapterCount <= 0 {
+		return ""
+	}
+	endNum := startNum + batchCount - 1
+	if NormalizeLanguage(lang) == LangEN {
+		return fmt.Sprintf("IMPORTANT BATCHING RULES:\n- This is only one batch of a longer outline generation. Generate chapter %d through chapter %d only.\n- The full novel has %d chapters in total, so do not rush the ending into this batch unless chapter %d is also the final chapter.\n- Keep pacing and escalation coherent with earlier chapters, while leaving room for later chapters to continue the story naturally.\n- Return exactly this batch range in order, with no missing or extra chapters.", startNum, endNum, totalChapterCount, endNum)
+	}
+	return fmt.Sprintf("重要分批规则：\n- 这只是一次更长大纲生成任务中的当前批次，只生成第 %d 章到第 %d 章。\n- 全书总章节数为 %d 章，因此除非第 %d 章正好是全书结局，否则不要提前把结尾压缩到这一批里。\n- 节奏与冲突升级要承接前文，同时为后续章节自然推进预留空间。\n- 仅按顺序返回这一批章节，不要缺章，也不要多返回额外章节。", startNum, endNum, totalChapterCount, endNum)
+}
+
+func planOutlineBatchSizes(total int, batchSize int) []int {
+	if total <= 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = outlineBatchSizeDefault
+	}
+	var batches []int
+	for total > 0 {
+		n := batchSize
+		if total < n {
+			n = total
+		}
+		batches = append(batches, n)
+		total -= n
+	}
+	return batches
+}
+
+func validateOutlineBatch(chapters []OutlineChapter, startNum, wantCount int) error {
+	if wantCount <= 0 {
+		return nil
+	}
+	if len(chapters) != wantCount {
+		return fmt.Errorf("%w: want %d chapters, got %d", errOutlineBatchMalformed, wantCount, len(chapters))
+	}
+	for i, ch := range chapters {
+		wantNum := startNum + i
+		if ch.Num != wantNum {
+			return fmt.Errorf("%w: chapter num %d at index %d, want %d", errOutlineBatchMalformed, ch.Num, i, wantNum)
+		}
+		if strings.TrimSpace(ch.Title) == "" {
+			return fmt.Errorf("%w: chapter %d title is empty", errOutlineBatchMalformed, wantNum)
+		}
+		if strings.TrimSpace(ch.Outline) == "" {
+			return fmt.Errorf("%w: chapter %d outline is empty", errOutlineBatchMalformed, wantNum)
+		}
+	}
+	return nil
+}
+
+func formatOutlineContext(chapters []OutlineChapter, lang string) string {
+	var sb strings.Builder
+	for _, ch := range chapters {
+		sb.WriteString(formatChapterLine(ch.Num, ch.Title, ch.Outline, lang))
+	}
+	return sb.String()
+}
+
+func formatOutlineBatchProgress(startNum, batchCount, done, total int, lang string) string {
+	endNum := startNum + batchCount - 1
+	if NormalizeLanguage(lang) == LangEN {
+		return fmt.Sprintf("Generating outline batch: chapters %d-%d (completed %d/%d before this batch)", startNum, endNum, done, total)
+	}
+	return fmt.Sprintf("正在生成大纲批次：第 %d-%d 章（本批前已完成 %d/%d 章）", startNum, endNum, done, total)
+}
+
+func formatOutlineBatchDone(startNum, batchCount, done, total int, lang string) string {
+	endNum := startNum + batchCount - 1
+	if NormalizeLanguage(lang) == LangEN {
+		return fmt.Sprintf("Outline batch complete: chapters %d-%d (now %d/%d complete)", startNum, endNum, done, total)
+	}
+	return fmt.Sprintf("大纲批次完成：第 %d-%d 章（当前已完成 %d/%d 章）", startNum, endNum, done, total)
+}
+
+func formatOutlineBatchReduceLog(startNum, batchCount int, lang string) string {
+	endNum := startNum + batchCount - 1
+	if NormalizeLanguage(lang) == LangEN {
+		return fmt.Sprintf("Outline batch chapters %d-%d looks truncated or malformed; retrying this range with smaller batches of %d chapters.", startNum, endNum, outlineBatchSizeReduced)
+	}
+	return fmt.Sprintf("第 %d-%d 章这一批大纲疑似被截断或结构不完整；将该范围改为每批 %d 章重试。", startNum, endNum, outlineBatchSizeReduced)
+}
+
+func parseOutlineBatchMeta(data map[string]string) (startNum, batchCount, totalChapterCount int) {
+	startNum = atoiOrDefault(data["StartNum"], 1)
+	batchCount = atoiOrDefault(data["NewChapterCount"], 0)
+	totalChapterCount = atoiOrDefault(data["TotalChapterCount"], 0)
+	if batchCount == 0 {
+		batchCount = atoiOrDefault(data["BatchCount"], 0)
+	}
+	if totalChapterCount == 0 {
+		totalChapterCount = atoiOrDefault(data["ChapterCount"], 0)
+	}
+	if totalChapterCount == 0 && batchCount > 0 {
+		totalChapterCount = startNum + batchCount - 1
+	}
+	return startNum, batchCount, totalChapterCount
+}
+
+func atoiOrDefault(s string, fallback int) int {
+	if strings.TrimSpace(s) == "" {
+		return fallback
+	}
+	var n int
+	if _, err := fmt.Sscanf(strings.TrimSpace(s), "%d", &n); err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 func formatShortOutlineRetryFeedback(shortNums []int, minLen int, lang string) string {

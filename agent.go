@@ -186,18 +186,23 @@ func callAgentAPI(ctx context.Context, apiCfg *APIConfig, messages []Message, on
 		agentCfg.MaxTokens = 8192
 	}
 
-	_, err := CallAPIStreamMessages(ctx, &agentCfg, messages, onChunk)
-	if err != nil {
+	if shouldUseStream(&agentCfg) {
+		_, err := CallAPIStreamMessages(ctx, &agentCfg, messages, onChunk)
+		if err == nil {
+			return nil
+		}
 		if ctx.Err() != nil {
 			return err
 		}
-		result, err2 := CallAPIMessages(ctx, &agentCfg, messages)
-		if err2 != nil {
-			return err
-		}
-		if onChunk != nil {
-			onChunk(result)
-		}
+		return err
+	}
+
+	result, err := CallAPIMessages(ctx, &agentCfg, messages)
+	if err != nil {
+		return err
+	}
+	if onChunk != nil {
+		onChunk(result)
 	}
 	return nil
 }
@@ -1407,7 +1412,7 @@ func getBuiltinTools() []Tool {
 				if ctx.State.Phase != "writing" {
 					return "", agentErr(ctx, "phase_not_writing")
 				}
-				if err := ConfirmChapterAction(ctx.State, ctx.ProgressPath); err != nil {
+				if err := ConfirmChapterAction(context.Background(), ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, ctx.Logger); err != nil {
 					return "", err
 				}
 				ch := ctx.State.Chapters[ctx.State.CurrentChapterIndex-1]
@@ -1594,6 +1599,7 @@ func getBuiltinTools() []Tool {
 				for i := startIdx; i < len(ctx.State.Chapters); i++ {
 					ch := &ctx.State.Chapters[i]
 					deleteFile(ChapterMarkdownPath(ctx.ProjectDir, ch.Num))
+					deleteFile(ChapterContentPath(ctx.ProjectDir, ch.Num))
 					ch.Content = ""
 					ch.Summary = ""
 					ch.Status = StatusPending

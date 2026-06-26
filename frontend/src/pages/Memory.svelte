@@ -1,5 +1,6 @@
 <script>
   import { api } from '../lib/api.js';
+  import { fetchChapter, fetchProgressLite } from '../lib/sse.js';
   import { progress, addToast } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
 
@@ -32,6 +33,17 @@
     return true;
   });
   $: timelineRows = buildTimeline(filtered);
+  $: ensureMemoryChaptersLoaded(filtered);
+
+  function ensureMemoryChaptersLoaded(items) {
+    const needed = [...new Set((items || []).map(e => e.chapter).filter(Boolean))];
+    for (const num of needed) {
+      const ch = chapters.find(c => c.num === num);
+      if (ch && !ch.content) {
+        fetchChapter(num).catch(() => {});
+      }
+    }
+  }
 
   function extractSnippet(chapterNum, position, maxRunes = 100) {
     if (!position || !chapterNum) return '';
@@ -72,7 +84,7 @@
 
   async function refreshProgress() {
     try {
-      progress.set(await api('GET', '/api/progress'));
+      progress.set(await fetchProgressLite());
       addToast($t('memory.refreshed'), 'success');
     } catch (e) {
       addToast(e.message, 'error');

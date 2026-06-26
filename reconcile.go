@@ -49,7 +49,9 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *APIConfig, cfg *Config
 
 	systemPrompt := SystemPromptFor(lang, "consistency_reviewer_json")
 
+	apiCfg.NeedJSON = true
 	rawResp := CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
+	apiCfg.NeedJSON = false
 	if rawResp == "" {
 		return fmt.Errorf("API 调用失败或被取消")
 	}
@@ -161,7 +163,9 @@ func regeneratePendingOutlines(ctx context.Context, apiCfg *APIConfig, cfg *Conf
 
 	systemPrompt := SystemPromptFor(lang, "outline_editor_locked_json")
 
+	apiCfg.NeedJSON = true
 	rawResp := CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
+	apiCfg.NeedJSON = false
 	if rawResp == "" {
 		return fmt.Errorf("API 调用失败或被取消")
 	}

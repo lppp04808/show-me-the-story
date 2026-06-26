@@ -4,15 +4,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 type APIConfig struct {
-	APIKey               string `json:"api_key"`
-	BaseURL              string `json:"base_url"`
-	Model                string `json:"model"`
-	MaxTokens            int    `json:"max_tokens,omitempty"`           // 0 = 模型默认；Agent 调用建议 ≥ 8192
-	HTTPTimeoutSeconds   int    `json:"http_timeout_seconds"`
-	ContextBudgetTokens  int    `json:"context_budget_tokens"` // 全书优化上下文预算，默认 900000
+	APIKey              string `json:"api_key"`
+	BaseURL             string `json:"base_url"`
+	Model               string `json:"model"`
+	MaxTokens           int    `json:"max_tokens,omitempty"` // 0 = 模型默认；Agent 调用建议 ≥ 8192
+	HTTPTimeoutSeconds  int    `json:"http_timeout_seconds"`
+	ContextBudgetTokens int    `json:"context_budget_tokens"` // 全书优化上下文预算，默认 900000
+	UseStream           bool   `json:"use_stream"`
+	ResponseFormat      bool   `json:"response_format"`
+	NeedJSON            bool   `json:"need_json"`
+}
+
+func (c *APIConfig) UnmarshalJSON(data []byte) error {
+	type alias APIConfig
+	aux := &struct {
+		UseStream *bool `json:"use_stream"`
+		*alias
+	}{alias: (*alias)(c)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if aux.UseStream == nil {
+		c.UseStream = true
+	} else {
+		c.UseStream = *aux.UseStream
+	}
+	return nil
 }
 
 type Config struct {
@@ -23,8 +44,9 @@ type Config struct {
 }
 
 const (
-	LangZH = "zh"
-	LangEN = "en"
+	LangZH             = "zh"
+	LangEN             = "en"
+	defaultCriticModel = "claude-haiku-4-5"
 )
 
 // NormalizeLanguage returns "zh" / "en"; unknown values fall back to "zh".
@@ -45,6 +67,8 @@ type StoryConfig struct {
 	WritingStyle          string `json:"writing_style"`
 	WritingPOV            string `json:"writing_pov"` // 叙述视角，如第一人称女主、第三人称限知等
 	StorySynopsis         string `json:"story_synopsis"`
+	CriticEnabled         bool   `json:"critic_enabled"`
+	CriticModel           string `json:"critic_model"`
 }
 
 type PromptsConfig struct {
@@ -53,6 +77,7 @@ type PromptsConfig struct {
 	ChapterRevision               string `json:"chapter_revision"`
 	ChapterSummary                string `json:"chapter_summary"`
 	FactCheck                     string `json:"fact_check"`
+	ChapterCritic                 string `json:"chapter_critic"`
 	OutlineRevision               string `json:"outline_revision"`
 	ForeshadowPlanning            string `json:"foreshadow_planning"`
 	ForeshadowUpdate              string `json:"foreshadow_update"`
@@ -68,12 +93,15 @@ type PromptsConfig struct {
 	BookConsistencyCheck          string `json:"book_consistency_check"`
 	BookRoadmap                   string `json:"book_roadmap"`
 	MemoryUpdate                  string `json:"memory_update"`
+	StageSummaryUpdate            string `json:"stage_summary_update"`
 }
 
 func DefaultAPIConfig() *APIConfig {
 	return &APIConfig{
 		HTTPTimeoutSeconds:  300,
 		ContextBudgetTokens: defaultContextBudgetTokens,
+		UseStream:           true,
+		ResponseFormat:      false,
 	}
 }
 
@@ -88,6 +116,7 @@ func DefaultConfigForLang(lang string) *Config {
 		Story: StoryConfig{
 			ChapterCount:          30,
 			TargetWordsPerChapter: 2500,
+			CriticModel:           defaultCriticModel,
 		},
 		SkillConfig: &SkillConfig{
 			EnabledSkills: make(map[string]bool),
@@ -162,6 +191,9 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.Story.TargetWordsPerChapter <= 0 {
 		cfg.Story.TargetWordsPerChapter = 2500
 	}
+	if strings.TrimSpace(cfg.Story.CriticModel) == "" {
+		cfg.Story.CriticModel = defaultCriticModel
+	}
 
 	cfg.Language = NormalizeLanguage(cfg.Language)
 
@@ -212,6 +244,9 @@ func (p *PromptsConfig) applyDefaults(lang string) {
 	if p.FactCheck == "" {
 		p.FactCheck = defaults.FactCheck
 	}
+	if p.ChapterCritic == "" {
+		p.ChapterCritic = defaults.ChapterCritic
+	}
 	if p.OutlineRevision == "" {
 		p.OutlineRevision = defaults.OutlineRevision
 	}
@@ -256,6 +291,9 @@ func (p *PromptsConfig) applyDefaults(lang string) {
 	}
 	if p.MemoryUpdate == "" {
 		p.MemoryUpdate = defaults.MemoryUpdate
+	}
+	if p.StageSummaryUpdate == "" {
+		p.StageSummaryUpdate = defaults.StageSummaryUpdate
 	}
 }
 

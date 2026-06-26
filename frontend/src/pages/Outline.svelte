@@ -1,5 +1,6 @@
 <script>
   import { api } from '../lib/api.js';
+  import { fetchProgressLite } from '../lib/sse.js';
   import { progress, config, streamingContent, streamingChapterIdx, taskRunning, addToast, showConfirm, continueAnalysis, outlineCharacterSuggestions, outlineCharacterShowSuggestions, settings } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
@@ -33,18 +34,51 @@
   let importContent = '';
   let continuationCount = 5;
 
-  async function generateOutline() {
+  async function maybeResumeCheckpoint(mode, startFn) {
     try {
+      const info = await api('GET', `/api/outline/checkpoint?mode=${mode}`);
+      if (!info?.exists) {
+        await startFn();
+        return;
+      }
+      const msg = mode === 'continuation'
+        ? $t('outline.toasts.continuationResumeAsk', { completed: info.completed_count, total: info.requested_new_chapters, next: info.next_start_num })
+        : $t('outline.toasts.resumeAsk', { completed: info.completed_count, total: info.total_chapters, next: info.next_start_num });
+      showConfirm(msg, async () => {
+        try {
+          await startFn();
+        } catch (e) {
+          addToast(e.message, 'error');
+        }
+      }, {
+        confirmLabel: $t('outline.resume.continue'),
+        cancelLabel: $t('outline.resume.restart'),
+        onCancel: async () => {
+          try {
+            await api('DELETE', '/api/outline/checkpoint');
+            await startFn();
+          } catch (e) {
+            addToast(e.message, 'error');
+          }
+        }
+      });
+    } catch (e) {
+      addToast(e.message, 'error');
+    }
+  }
+
+  async function generateOutline() {
+    await maybeResumeCheckpoint('initial', async () => {
       await api('POST', '/api/outline/generate');
       addToast($t('outline.toasts.outlineStarted'), 'info');
-    } catch (e) { addToast(e.message, 'error'); }
+    });
   }
 
   async function confirmOutline() {
     showConfirm($t('outline.toasts.confirmAsk'), async () => {
       try {
         await api('POST', '/api/outline/confirm');
-        progress.set(await api('GET', '/api/progress'));
+        progress.set(await fetchProgressLite());
         addToast($t('outline.toasts.outlineConfirmed'), 'success');
         window.location.hash = '#writing';
       } catch (e) { addToast(e.message, 'error'); }
@@ -66,17 +100,17 @@
     showConfirm($t('outline.toasts.deleteConfirm', { n: chapters.length }), async () => {
       try {
         await api('DELETE', '/api/outline');
-        progress.set(await api('GET', '/api/progress'));
+        progress.set(await fetchProgressLite());
         addToast($t('outline.toasts.deleted'), 'success');
       } catch (e) { addToast(e.message, 'error'); }
     });
   }
 
   async function generateContinuation() {
-    try {
+    await maybeResumeCheckpoint('continuation', async () => {
       await api('POST', '/api/outline/generate-continuation', { chapter_count: Number(continuationCount) || 5 });
       addToast($t('outline.toasts.continuationStarted'), 'info');
-    } catch (e) { addToast(e.message, 'error'); }
+    });
   }
 
   function startEdit(ch) {
@@ -93,7 +127,7 @@
     if (!editTitle.trim() || !editOutline.trim()) { addToast($t('outline.toasts.editRequired'), 'error'); return; }
     try {
       await api('PUT', '/api/outline/' + editingNum, { title: editTitle.trim(), outline: editOutline.trim() });
-      progress.set(await api('GET', '/api/progress'));
+      progress.set(await fetchProgressLite());
       addToast($t('outline.toasts.editSaved', { num: editingNum }), 'success');
       editingNum = -1;
     } catch (e) { addToast(e.message, 'error'); }
@@ -112,7 +146,7 @@
     if (!$continueAnalysis) return;
     try {
       await api('POST', '/api/continue/confirm', $continueAnalysis);
-      progress.set(await api('GET', '/api/progress'));
+      progress.set(await fetchProgressLite());
       continueAnalysis.set(null);
       showImport = false;
       importContent = '';

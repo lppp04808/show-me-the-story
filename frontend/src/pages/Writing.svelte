@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
+  import { fetchChapter, fetchProgressLite } from '../lib/sse.js';
   import { progress, taskRunning, streamingContent, streamingChapterIdx, selectedChapter, autoConfirm, addToast, confirmModal, currentPage } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
   import { countProseUnits } from '../lib/proseUnits.js';
@@ -54,8 +55,14 @@
   $: ch = $selectedChapter >= 0 && $selectedChapter < chapters.length ? chapters[$selectedChapter] : null;
   $: isCurrent = ch && currentIdx === $selectedChapter;
   $: isStreamingThis = $streamingChapterIdx === $selectedChapter && $streamingContent;
+  $: if (ch?.num && !isStreamingThis && !ch.content && ch.status !== 'pending') {
+    fetchChapter(ch.num).catch(() => {});
+  }
   // 流式期间 $streamingContent 只含尾部窗口（性能保护），全文在生成结束后由 progress 拉取
   $: displayContent = isStreamingThis ? $streamingContent : (ch?.content || '');
+  $: if (ch && !showManualEdit) {
+    manualContent = ch.content || '';
+  }
   $: chapterWordCount = ch?.content ? countProseUnits(ch.content) : 0;
   $: showTaskTokens = $taskRunning && isCurrent;
   $: totalWords = chapters.reduce((sum, c) => sum + (c.content ? countProseUnits(c.content) : 0), 0);
@@ -73,7 +80,7 @@
     try {
       const res = await api('POST', '/api/chapter/conflict-resolve', { action });
       if (action === 'retry') {
-        progress.set(await api('GET', '/api/progress'));
+        progress.set(await fetchProgressLite());
         await api('POST', '/api/chapter/generate');
         addToast($t('writing.toasts.generateStarted', { num: writingConflict?.chapter_num }), 'info');
         return;
@@ -101,6 +108,8 @@
 
   let reviseFeedback = '';
   let showRevise = false;
+  let showManualEdit = false;
+  let manualContent = '';
   let contentEl;
   let hasPolishSkills = false;
 
@@ -119,6 +128,7 @@
   function selectChapter(i) {
     selectedChapter.set(i);
     showRevise = false;
+    showManualEdit = false;
     reviseFeedback = '';
   }
 
@@ -132,10 +142,10 @@
   async function doConfirm() {
     try {
       await api('POST', '/api/chapter/confirm');
-      progress.set(await api('GET', '/api/progress'));
+      const next = await fetchProgressLite();
+      progress.set(next);
       addToast($t('writing.toasts.confirmed', { num: ch?.num }), 'success');
       // 跳到下一章
-      const next = await api('GET', '/api/progress');
       if (next.current_chapter_index < (next.chapters || []).length) {
         selectedChapter.set(next.current_chapter_index);
       }
@@ -166,6 +176,26 @@
       await api('POST', '/api/chapter/polish', { num: ch.num });
       addToast($t('writing.toasts.polishStarted', { num: ch.num }), 'info');
     } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  async function saveManualEdit() {
+    if (!ch) return;
+    try {
+      await api('POST', '/api/chapter/edit', {
+        num: ch.num,
+        operation: 'replace_text',
+        old_text: ch.content || '',
+        new_text: manualContent,
+      });
+      await fetchChapter(ch.num);
+      addToast($t('writing.toasts.manualSaved', { num: ch.num }), 'success');
+      showManualEdit = false;
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  function cancelManualEdit() {
+    manualContent = ch?.content || '';
+    showManualEdit = false;
   }
 
   async function copyContent() {
@@ -363,12 +393,30 @@
                     {$t('writing.chapter.streamHint')}
                   </div>
                 {/if}
-                <div bind:this={contentEl} class="bg-base-300 rounded-lg p-4 text-[15px] chapter-content reading-area max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto">
-                  {displayContent}
-                  {#if isStreamingThis}
-                    <span class="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-0.5 align-text-bottom"></span>
-                  {/if}
-                </div>
+                {#if showManualEdit}
+                  <div class="space-y-2">
+                    <textarea
+                      class="textarea w-full h-[calc(100vh-420px)] min-h-[200px] text-[15px] font-serif"
+                      bind:value={manualContent}
+                      disabled={$taskRunning}
+                      placeholder={$t('writing.manual.placeholder')}
+                    ></textarea>
+                    <div class="flex justify-between items-center">
+                      <span class="text-xs text-base-content/40">{$t('writing.manual.hint')}</span>
+                      <div class="flex gap-2">
+                        <button class="btn btn-ghost btn-xs" on:click={cancelManualEdit}>{$t('common.cancel')}</button>
+                        <button class="btn btn-primary btn-xs" on:click={saveManualEdit} disabled={$taskRunning}>{$t('writing.manual.save')}</button>
+                      </div>
+                    </div>
+                  </div>
+                {:else}
+                  <div bind:this={contentEl} class="bg-base-300 rounded-lg p-4 text-[15px] chapter-content reading-area max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto">
+                    {displayContent}
+                    {#if isStreamingThis}
+                      <span class="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-0.5 align-text-bottom"></span>
+                    {/if}
+                  </div>
+                {/if}
               {:else if ch.status === 'pending'}
                 <div class="bg-base-300 rounded-lg p-6 text-center text-sm text-base-content/40">
                   {#if isCurrent}
@@ -388,7 +436,8 @@
                   <button class="btn btn-success btn-sm" on:click={doConfirm} disabled={$taskRunning}>{$t('writing.btn.confirm')}</button>
                 {/if}
                 {#if ch.content && ch.status !== 'writing'}
-                  <button class="btn btn-ghost btn-sm" on:click={() => showRevise = !showRevise} disabled={$taskRunning}>{$t('writing.btn.revise')}</button>
+                  <button class="btn btn-ghost btn-sm" on:click={() => { showRevise = !showRevise; showManualEdit = false; }} disabled={$taskRunning}>{$t('writing.btn.revise')}</button>
+                  <button class="btn btn-ghost btn-sm" on:click={() => { showManualEdit = !showManualEdit; showRevise = false; manualContent = ch.content || ''; }} disabled={$taskRunning || isStreamingThis}>{$t('writing.btn.manualEdit')}</button>
                   {#if hasPolishSkills}
                     <button class="btn btn-ghost btn-sm" on:click={doPolish} disabled={$taskRunning} title={$t('writing.btn.polish.tip')}>{$t('writing.btn.polish')}</button>
                   {/if}

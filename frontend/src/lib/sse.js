@@ -9,6 +9,55 @@ let reconnectTimer = null;
 let tokenPollTimer = null;
 let taskCount = 0;
 
+const CHAPTER_CACHE_LIMIT = 12;
+const chapterCache = new Map();
+
+function chapterCacheKey(num) {
+  return String(num);
+}
+
+function cacheChapter(chapter) {
+  if (!chapter || chapter.num == null) return;
+  const key = chapterCacheKey(chapter.num);
+  chapterCache.delete(key);
+  chapterCache.set(key, chapter);
+  while (chapterCache.size > CHAPTER_CACHE_LIMIT) {
+    const oldest = chapterCache.keys().next().value;
+    chapterCache.delete(oldest);
+  }
+}
+
+function mergeProgressWithChapterCache(p) {
+  if (!p?.chapters?.length) return p;
+  return {
+    ...p,
+    chapters: p.chapters.map(ch => {
+      const cached = chapterCache.get(chapterCacheKey(ch.num));
+      return cached ? { ...ch, content: cached.content || '' } : ch;
+    }),
+  };
+}
+
+export async function fetchProgressLite() {
+  const p = await api('GET', '/api/progress-lite');
+  const merged = mergeProgressWithChapterCache(p);
+  progress.set(merged);
+  return merged;
+}
+
+export async function fetchChapter(num) {
+  const chapter = await api('GET', `/api/chapters/${num}`);
+  cacheChapter(chapter);
+  progress.update(p => {
+    if (!p?.chapters) return p;
+    return {
+      ...p,
+      chapters: p.chapters.map(ch => ch.num === chapter.num ? { ...ch, ...chapter, content: chapter.content || '' } : ch),
+    };
+  });
+  return chapter;
+}
+
 // —— 流式输出节流缓冲 + 尾部窗口 ——
 const FLUSH_INTERVAL = 150;
 const TAIL_MAX = 3000;
@@ -42,13 +91,13 @@ let progressFetchTimer = null;
 function refreshProgress(immediate = false) {
   if (immediate) {
     if (progressFetchTimer) { clearTimeout(progressFetchTimer); progressFetchTimer = null; }
-    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    fetchProgressLite().catch(() => {});
     return;
   }
   if (progressFetchTimer) return;
   progressFetchTimer = setTimeout(() => {
     progressFetchTimer = null;
-    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    fetchProgressLite().catch(() => {});
   }, 500);
 }
 
@@ -140,8 +189,7 @@ export function connectSSE() {
       const name = taskLabel(d.task);
       addToast(translate('toast.taskDone', { name }), 'success');
     } else if (d.task === 'chapter_generation') {
-      api('GET', '/api/progress').then(p => {
-        progress.set(p);
+      fetchProgressLite().then(p => {
         if (!p?.pending_writing_conflict) {
           lastFailedTask.set({ task: d.task, taskName: taskLabel(d.task) });
         }
@@ -208,7 +256,7 @@ export function connectSSE() {
     api('GET', '/api/config').then(c => {
       config.set(c);
     }).catch(() => {});
-    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    fetchProgressLite().catch(() => {});
     addToast(translate('toast.settingsReconciled', { detail: d.explanation || '' }), 'success');
   });
 
@@ -308,7 +356,7 @@ export function connectSSE() {
     });
     api('GET', '/api/config').then(c => config.set(c)).catch(() => {});
     api('GET', '/api/settings').then(s => settings.set(s)).catch(() => {});
-    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    fetchProgressLite().catch(() => {});
   });
 
   eventSource.onerror = () => {

@@ -15,9 +15,9 @@ type OutlineCharacterSuggestion struct {
 }
 
 type OutlineCharacterReport struct {
-	HasSuggestions bool                       `json:"has_suggestions"`
+	HasSuggestions bool                         `json:"has_suggestions"`
 	Suggestions    []OutlineCharacterSuggestion `json:"suggestions"`
-	Summary        string                     `json:"summary"`
+	Summary        string                       `json:"summary"`
 }
 
 func formatRegisteredCharactersForCheck(settings *ProjectSettings, lang string) string {
@@ -78,14 +78,16 @@ func CheckOutlineCharacterConsistency(ctx context.Context, apiCfg *APIConfig, cf
 
 	lang := cfg.Language
 	userPrompt := RenderPrompt(cfg.Prompts.OutlineCharacterCheck, map[string]string{
-		"Title":                 preferUserValue(cfg.Story.Title, state.Title),
-		"Outline":               buildFullOutlineText(state, lang),
-		"RegisteredCharacters":  formatRegisteredCharactersForCheck(settings, lang),
-		"AcceptedSummaries":     buildAcceptedSummariesText(state, lang),
+		"Title":                preferUserValue(cfg.Story.Title, state.Title),
+		"Outline":              buildFullOutlineText(state, lang),
+		"RegisteredCharacters": formatRegisteredCharactersForCheck(settings, lang),
+		"AcceptedSummaries":    buildAcceptedSummariesText(state, lang),
 	})
 	systemPrompt := SystemPromptFor(lang, "outline_character_checker_json")
 
+	apiCfg.NeedJSON = true
 	rawResp := CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+	apiCfg.NeedJSON = false
 	if rawResp == "" {
 		if len(heuristic) > 0 {
 			return &OutlineCharacterReport{

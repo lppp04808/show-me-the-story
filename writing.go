@@ -108,6 +108,13 @@ func formatExtraWritingConstraintsBlock(constraints, lang string) string {
 	return "【补充写作约束（事实核查冲突调和）】\n" + constraints
 }
 
+func formatNativeProseRequirementsBlock(lang string) string {
+	if NormalizeLanguage(lang) == LangEN {
+		return ""
+	}
+	return "【中文表达要求】\n1. 正文必须使用自然、地道、符合中文原创小说习惯的表达，避免翻译腔、欧化句式、英文语序直译、解释性书面腔和生硬搭配。\n2. 优先使用简洁、顺口、贴合语境的中文表达；避免机械重复主语，避免空泛词语和套路化抒情堆砌文气。\n3. 情绪、关系和信息变化尽量通过动作、对话、感官细节与场景反应自然呈现，少做解释性总结。\n4. 输出前自行通读一遍，把拗口、别扭、像翻译过来的句子改成自然中文后再输出最终正文。"
+}
+
 func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath string, settings *ProjectSettings, logger *LogBroadcaster) error {
 	if err := validateAPIConfig(apiCfg); err != nil {
 		return err
@@ -134,10 +141,12 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 
 	logger.InfoKey("log.chapter_start", ch.Num, ch.Title)
 
+	totalSteps, criticStep, factStep, foreshadowStep, memoryStep := chapterAuditStepPlan(cfg)
+
 	// 写前检查：本章大纲若已与实际写出的剧情冲突（如大纲安排初遇但前文已认识），
 	// 先最小化修订大纲再动笔，避免按过时大纲写出矛盾内容。
 	if i > 0 {
-		logger.StepInfo(1, 6, "正在检查本章大纲与当前剧情的一致性...")
+		logger.StepInfo(1, totalSteps, "正在检查本章大纲与当前剧情的一致性...")
 		revised, err := checkOutlineConsistency(ctx, apiCfg, cfg, state, i, logger)
 		if err != nil {
 			logger.WarnKey("log.outline_check_failed", err)
@@ -163,7 +172,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 		if ctx.Err() != nil {
 			return fmt.Errorf("任务已取消")
 		}
-		logger.StepInfo(2, 6, "正在构思并撰写正文...")
+		logger.StepInfo(2, totalSteps, "正在构思并撰写正文...")
 		content, err := generateChapterContentWithLengthControl(ctx, apiCfg, cfg, state, i, settings, extraConstraints, logger)
 		if err != nil {
 			return err
@@ -174,7 +183,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 		ch.Content = content
 		logger.InfoKey("log.prose_done", countProseUnits(content))
 
-		logger.StepInfo(3, 6, "正在提炼本章摘要...")
+		logger.StepInfo(3, totalSteps, "正在提炼本章摘要...")
 		summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
 		if summary == "" {
 			return fmt.Errorf("摘要提炼失败或被取消")
@@ -182,16 +191,37 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 		ch.Summary = summary
 		logger.InfoKey("log.summary_done")
 
-		logger.StepInfo(4, 6, "正在对本章进行事实核查...")
-		historySummary := buildHistorySummary(state, i)
+		criticFailed := false
+		criticIssues := ""
+		if criticEnabled(cfg) {
+			logger.StepInfo(criticStep, totalSteps, "正在进行一致性审稿...")
+			criticResult := generateChapterCriticWithRetryLog(ctx, apiCfg, cfg, state, i, content, summary, settings, logger)
+			criticFailed, criticIssues = parseChapterCriticResult(criticResult)
+			if criticFailed {
+				accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(criticIssues))
+				logger.WarnBilingual(
+					fmt.Sprintf("[一致性审稿] 发现问题: %s", criticIssues),
+					fmt.Sprintf("[Consistency critic] Issues found: %s", criticIssues),
+				)
+			} else {
+				logger.InfoBilingual(defaultCriticPassZH, defaultCriticPassEN)
+			}
+		}
+
+		logger.StepInfo(factStep, totalSteps, "正在对本章进行事实核查...")
+		historySummary := buildHistorySummaryForLang(state, i, cfg.Language)
 		factCheckResult := generateChapterFactCheckWithRetryLog(ctx, apiCfg, cfg, state, i, content, historySummary, logger)
 
-		failed, issues := parseFactCheckResult(factCheckResult)
-		if failed {
-			accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues))
+		factFailed, factIssues := parseFactCheckResult(factCheckResult)
+		if factFailed {
+			accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(factIssues))
+		}
+		roundIssues := mergeUniqueIssues(splitFactCheckIssues(criticIssues), splitFactCheckIssues(factIssues))
+		if len(roundIssues) > 0 {
+			combinedIssues := strings.Join(roundIssues, "；")
 			if attempt < maxFactCheckRetries {
 				logger.WarnKey("log.factcheck_retry", ch.Num, attempt+1)
-				logger.WarnKey("log.factcheck_details", issues)
+				logger.WarnKey("log.factcheck_details", combinedIssues)
 				continue
 			}
 
@@ -218,12 +248,29 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 					return fmt.Errorf("摘要提炼失败或被取消")
 				}
 				ch.Summary = summary
+
+				criticFailed = false
+				criticIssues = ""
+				if criticEnabled(cfg) {
+					criticResult := generateChapterCriticWithRetryLog(ctx, apiCfg, cfg, state, i, content, summary, settings, logger)
+					criticFailed, criticIssues = parseChapterCriticResult(criticResult)
+					if criticFailed {
+						accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(criticIssues))
+					}
+				}
+
+				historySummary = buildHistorySummaryForLang(state, i, cfg.Language)
 				factCheckResult = generateChapterFactCheckWithRetryLog(ctx, apiCfg, cfg, state, i, content, historySummary, logger)
-				failed, issues = parseFactCheckResult(factCheckResult)
-				if failed {
-					accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues))
-				} else {
+				factFailed, factIssues = parseFactCheckResult(factCheckResult)
+				if factFailed {
+					accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(factIssues))
+				}
+				roundIssues = mergeUniqueIssues(splitFactCheckIssues(criticIssues), splitFactCheckIssues(factIssues))
+				if len(roundIssues) == 0 {
 					logger.InfoKey("log.factcheck_constraint_pass")
+					if criticEnabled(cfg) {
+						logger.InfoBilingual(defaultCriticPassZH, defaultCriticPassEN)
+					}
 					break
 				}
 			}
@@ -245,11 +292,11 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 	state.PendingWritingConflict = nil
 
 	if len(state.Foreshadows) > 0 {
-		logger.StepInfo(5, 6, "正在更新伏笔状态...")
+		logger.StepInfo(foreshadowStep, totalSteps, "正在更新伏笔状态...")
 		syncForeshadowsAfterChapter(ctx, apiCfg, cfg, state, i, progressPath, logger)
 	}
 
-	logger.StepInfo(6, 6, "正在维护叙事记忆...")
+	logger.StepInfo(memoryStep, totalSteps, "正在维护叙事记忆...")
 	syncMemoryAfterChapter(ctx, apiCfg, cfg, state, i, progressPath, logger)
 
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
@@ -311,7 +358,10 @@ func checkOutlineConsistency(ctx context.Context, apiCfg *APIConfig, cfg *Config
 	})
 	systemPrompt := SystemPromptFor(lang, "outline_editor_brief_json")
 
+	apiCfg.NeedJSON = true
 	rawResp := CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+	apiCfg.NeedJSON = false
+
 	if rawResp == "" {
 		return false, fmt.Errorf("API 调用失败或被取消")
 	}
@@ -400,6 +450,7 @@ func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 	}
 
 	syncMemoryAfterChapter(ctx, apiCfg, cfg, state, chapterIdx, progressPath, logger)
+	updateStageSummaryAfterChapter(ctx, apiCfg, cfg, state, chapterIdx, progressPath, logger)
 
 	logger.SuccessKey("log.chapter_revised")
 	return nil
@@ -465,12 +516,13 @@ func ReviseSpecificChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Co
 	}
 
 	syncMemoryAfterChapter(ctx, apiCfg, cfg, state, chapterIdx, progressPath, logger)
+	updateStageSummaryAfterChapter(ctx, apiCfg, cfg, state, chapterIdx, progressPath, logger)
 
 	logger.SuccessKey("log.chapter_specific_done", ch.Num)
 	return nil
 }
 
-func ConfirmChapterAction(state *Progress, progressPath string) error {
+func ConfirmChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath string, logger *LogBroadcaster) error {
 	if state.Phase != "writing" {
 		return fmt.Errorf("当前不在写作阶段")
 	}
@@ -487,7 +539,11 @@ func ConfirmChapterAction(state *Progress, progressPath string) error {
 
 	ch.Status = StatusAccepted
 	state.CurrentChapterIndex = chapterIdx + 1
-	return SaveProgress(progressPath, state)
+	if err := SaveProgress(progressPath, state); err != nil {
+		return err
+	}
+	updateStageSummaryAfterChapter(ctx, apiCfg, cfg, state, chapterIdx, progressPath, logger)
+	return nil
 }
 
 func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraints string, logger *LogBroadcaster) (string, error) {
@@ -536,6 +592,9 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.Foreshadows}}", foreshadowContext)
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.Memory}}", memoryContext)
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.WritingPOV}}", formatWritingPOVBlock(cfg.Story.WritingPOV, lang))
+	if block := formatNativeProseRequirementsBlock(lang); block != "" {
+		userPrompt += "\n\n" + block
+	}
 	if block := formatExtraWritingConstraintsBlock(extraWritingConstraints, lang); block != "" {
 		userPrompt += "\n\n" + block
 	}
@@ -550,7 +609,9 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 	}
 
 	// 通知前端清空流式缓冲（事实核查重试/自动连写时避免内容叠加）
-	logger.StreamStart(idx)
+	if shouldUseStream(apiCfg) {
+		logger.StreamStart(idx)
+	}
 	content, err := CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
 	if err != nil {
 		return "", err
@@ -719,7 +780,9 @@ func reviseChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Con
 		logger.ContentChunk(chapterIdx, chunk)
 	}
 
-	logger.StreamStart(chapterIdx)
+	if shouldUseStream(apiCfg) {
+		logger.StreamStart(chapterIdx)
+	}
 	content, err := CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
 	if err != nil {
 		return "", err
@@ -767,7 +830,9 @@ func reviseSubsequentOutlines(ctx context.Context, apiCfg *APIConfig, cfg *Confi
 
 	systemPrompt := SystemPromptFor(lang, "outline_editor_locked_json")
 
+	apiCfg.NeedJSON = true
 	rawResp := CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
+	apiCfg.NeedJSON = false
 	if rawResp == "" {
 		return fmt.Errorf("API 调用失败或被取消")
 	}
@@ -969,7 +1034,9 @@ func PolishChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 		logger.ContentChunk(chapterIdx, chunk)
 	}
 
-	logger.StreamStart(chapterIdx)
+	if shouldUseStream(apiCfg) {
+		logger.StreamStart(chapterIdx)
+	}
 	result, err := CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
 	if err != nil {
 		return fmt.Errorf("润色失败: %w", err)

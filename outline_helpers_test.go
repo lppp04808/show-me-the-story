@@ -40,6 +40,51 @@ func TestValidateOutlineChapterLengths(t *testing.T) {
 	}
 }
 
+func TestPlanOutlineBatchSizes(t *testing.T) {
+	got := planOutlineBatchSizes(45, outlineBatchSizeDefault)
+	want := []int{20, 20, 5}
+	if len(got) != len(want) {
+		t.Fatalf("planOutlineBatchSizes() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("planOutlineBatchSizes() = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestValidateOutlineBatch(t *testing.T) {
+	valid := []OutlineChapter{
+		{Num: 11, Title: "A", Outline: "outline-a"},
+		{Num: 12, Title: "B", Outline: "outline-b"},
+	}
+	if err := validateOutlineBatch(valid, 11, 2); err != nil {
+		t.Fatalf("validateOutlineBatch(valid) error = %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		chapters []OutlineChapter
+	}{
+		{"missing", valid[:1]},
+		{"wrong-num", []OutlineChapter{{Num: 11, Title: "A", Outline: "outline-a"}, {Num: 13, Title: "B", Outline: "outline-b"}}},
+		{"empty-title", []OutlineChapter{{Num: 11, Title: "", Outline: "outline-a"}, {Num: 12, Title: "B", Outline: "outline-b"}}},
+		{"empty-outline", []OutlineChapter{{Num: 11, Title: "A", Outline: ""}, {Num: 12, Title: "B", Outline: "outline-b"}}},
+	}
+	for _, tc := range cases {
+		if err := validateOutlineBatch(tc.chapters, 11, 2); err == nil {
+			t.Fatalf("validateOutlineBatch(%s) error = nil, want non-nil", tc.name)
+		}
+	}
+}
+
+func TestBuildOutlineBatchHint(t *testing.T) {
+	hint := buildOutlineBatchHint(21, 20, 300, LangZH)
+	if hint == "" {
+		t.Fatal("buildOutlineBatchHint() = empty, want content")
+	}
+}
+
 func stringsRepeat(s string, n int) string {
 	out := ""
 	for i := 0; i < n; i++ {

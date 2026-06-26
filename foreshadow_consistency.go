@@ -44,14 +44,16 @@ func CheckForeshadowOutlineConsistency(ctx context.Context, apiCfg *APIConfig, c
 
 	lang := cfg.Language
 	userPrompt := RenderPrompt(cfg.Prompts.ForeshadowOutlineConsistency, map[string]string{
-		"Title":              preferUserValue(cfg.Story.Title, state.Title),
-		"Outline":            buildFullOutlineText(state, lang),
-		"Foreshadows":        formatForeshadowsForPromptLang(state.Foreshadows, lang),
-		"AcceptedSummaries":  buildAcceptedSummariesText(state, lang),
+		"Title":             preferUserValue(cfg.Story.Title, state.Title),
+		"Outline":           buildFullOutlineText(state, lang),
+		"Foreshadows":       formatForeshadowsForPromptLang(state.Foreshadows, lang),
+		"AcceptedSummaries": buildAcceptedSummariesText(state, lang),
 	})
 	systemPrompt := SystemPromptFor(lang, "foreshadow_outline_checker_json")
 
+	apiCfg.NeedJSON = true
 	rawResp := CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+	apiCfg.NeedJSON = false
 	if rawResp == "" {
 		return nil, fmt.Errorf("API 调用失败或被取消")
 	}

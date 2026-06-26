@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
+  import { fetchProgressLite } from '../lib/sse.js';
   import {
     pendingConfigChanges,
     showConfigChangePanel,
@@ -53,7 +54,7 @@
       pendingConfigChanges.set([]);
       showConfigChangePanel.set(false);
       config.set(await api('GET', '/api/config'));
-      progress.set(await api('GET', '/api/progress'));
+      progress.set(await fetchProgressLite());
       addToast($t('configChange.applied', { n: selected.length }), 'success');
     } catch (e) {
       addToast(e.message, 'error');

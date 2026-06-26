@@ -25,14 +25,14 @@ type Handlers struct {
 	projectMu   sync.RWMutex
 
 	// Per-project state (updated on switchProject)
-	cfg          *Config
-	cfgPath      string
-	state        *Progress
-	progressPath string
-	settings     *ProjectSettings
-	settingsPath string
-	skills       []Skill
-	sessionsDir  string
+	cfg             *Config
+	cfgPath         string
+	state           *Progress
+	progressPath    string
+	settings        *ProjectSettings
+	settingsPath    string
+	skills          []Skill
+	sessionsDir     string
 	postprocess     *PostProcessState
 	postprocessPath string
 
@@ -362,6 +362,9 @@ func (h *Handlers) PutConfig(w http.ResponseWriter, r *http.Request) {
 	if newCfg.Story.TargetWordsPerChapter <= 0 {
 		newCfg.Story.TargetWordsPerChapter = 2500
 	}
+	if strings.TrimSpace(newCfg.Story.CriticModel) == "" {
+		newCfg.Story.CriticModel = defaultCriticModel
+	}
 	newCfg.Language = NormalizeLanguage(newCfg.Language)
 	if newCfg.Language == "" {
 		newCfg.Language = h.cfg.Language
@@ -458,6 +461,32 @@ func (h *Handlers) GetProgress(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, h.state)
 }
 
+func (h *Handlers) GetProgressLite(w http.ResponseWriter, r *http.Request) {
+	h.writeJSON(w, http.StatusOK, ProgressWithoutContent(h.state))
+}
+
+func (h *Handlers) GetChapter(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+
+	numStr := r.PathValue("num")
+	var num int
+	if _, err := fmt.Sscanf(numStr, "%d", &num); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num")
+		return
+	}
+
+	for _, ch := range h.state.Chapters {
+		if ch.Num == num {
+			h.writeJSON(w, http.StatusOK, ch)
+			return
+		}
+	}
+
+	h.writeErrorReq(w, r, http.StatusNotFound, "chapter_n_not_found", num)
+}
+
 func (h *Handlers) DeleteProgress(w http.ResponseWriter, r *http.Request) {
 	if h.isTaskRunning() {
 		h.writeErrorReq(w, r, http.StatusConflict, "reset_progress_locked")
@@ -468,9 +497,43 @@ func (h *Handlers) DeleteProgress(w http.ResponseWriter, r *http.Request) {
 		h.writeErrorReq(w, r, http.StatusInternalServerError, "delete_progress_failed", err.Error())
 		return
 	}
+	if err := DeleteChapterContentDir(h.projectDir()); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "delete_progress_failed", err.Error())
+		return
+	}
+	if err := DeleteProgressSidecars(h.projectDir()); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "delete_progress_failed", err.Error())
+		return
+	}
 
 	h.state = &Progress{Phase: "outline"}
 	h.writeJSON(w, http.StatusOK, h.state)
+}
+
+func (h *Handlers) GetOutlineCheckpoint(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	mode := strings.TrimSpace(r.URL.Query().Get("mode"))
+	switch mode {
+	case outlineCheckpointModeInitial:
+		h.writeJSON(w, http.StatusOK, initialOutlineCheckpointInfo(h.cfg, h.progressPath, h.settings))
+	case outlineCheckpointModeContinuation:
+		h.writeJSON(w, http.StatusOK, continuationOutlineCheckpointInfo(h.cfg, h.state, h.progressPath, h.settings))
+	default:
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", "mode required")
+	}
+}
+
+func (h *Handlers) DeleteOutlineCheckpoint(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if err := DeleteOutlineCheckpoint(OutlineCheckpointPath(h.progressPath)); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_failed", err.Error())
+		return
+	}
+	h.writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (h *Handlers) PostOutlineGenerate(w http.ResponseWriter, r *http.Request) {
@@ -652,10 +715,10 @@ func (h *Handlers) PostOutlineCharactersConfirm(w http.ResponseWriter, r *http.R
 			notes += role
 		}
 		h.settings.Characters = append(h.settings.Characters, Character{
-			ID:       h.settings.nextCharacterID(),
-			Name:     name,
+			ID:         h.settings.nextCharacterID(),
+			Name:       name,
 			Background: notes,
-			Notes:    fmt.Sprintf("首次登场：第%d章", item.ChapterNum),
+			Notes:      fmt.Sprintf("首次登场：第%d章", item.ChapterNum),
 		})
 		existing[name] = true
 	}
@@ -720,7 +783,7 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 			if !h.isAutoConfirmOn() {
 				break
 			}
-			if err := ConfirmChapterAction(h.state, h.progressPath); err != nil {
+			if err := ConfirmChapterAction(context.Background(), h.apiCfg, h.cfg, h.state, h.progressPath, h.logger); err != nil {
 				h.logger.WarnKey("log.chapter_autoconfirm_failed", err)
 				break
 			}
@@ -842,7 +905,7 @@ func (h *Handlers) PostChapterConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := ConfirmChapterAction(h.state, h.progressPath); err != nil {
+	if err := ConfirmChapterAction(context.Background(), h.apiCfg, h.cfg, h.state, h.progressPath, h.logger); err != nil {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
@@ -1213,6 +1276,7 @@ func (h *Handlers) DeleteChaptersFrom(w http.ResponseWriter, r *http.Request) {
 	for i := startIdx; i < len(h.state.Chapters); i++ {
 		ch := &h.state.Chapters[i]
 		deleteFile(ChapterMarkdownPath(h.projectDir(), ch.Num))
+		deleteFile(ChapterContentPath(h.projectDir(), ch.Num))
 		ch.Content = ""
 		ch.Summary = ""
 		ch.Status = StatusPending
@@ -2659,7 +2723,7 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 
 		session.UpdatedAt = time.Now().Format(time.RFC3339)
 
-		if err := SaveChatSession(h.sessionsDir, session); err != nil {
+		if err = SaveChatSession(h.sessionsDir, session); err != nil {
 			h.logger.WarnKey("log.save_session_failed", err)
 		}
 

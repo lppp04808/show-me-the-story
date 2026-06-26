@@ -5,3 +5,6 @@
 storys/
 frontend/node_modules
 frontend/dist
+
+.idea/
+.claude/

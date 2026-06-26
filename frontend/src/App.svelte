@@ -58,7 +58,7 @@
           // Subsequent toggles persist in localStorage.
           setLocale(cur.language);
         }
-        try { const p = await api('GET', '/api/progress'); progress.set(p); } catch (e) {}
+        try { const p = await api('GET', '/api/progress-lite'); progress.set(p); } catch (e) {}
       }
     } catch (e) {}
   });

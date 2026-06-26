@@ -26,6 +26,9 @@ Return JSON in exactly this structure:
 [Registered characters]
 {{.CharacterList}}
 
+[Generation range for this call]
+Generate only chapter {{.BatchStart}} through chapter {{.BatchEnd}} in this call, {{.BatchCount}} chapters total. The full novel has {{.TotalChapterCount}} chapters.
+
 Rules:
 1. The outline must cover the full story arc, from inciting incident to resolution.
 2. Each chapter's outline field must be {{.OutlineMinWords}}–{{.OutlineMaxWords}} characters (excluding the chapter title), with concrete plot beats — no vague one-liners.
@@ -34,7 +37,8 @@ Rules:
 5. One-time events such as first meetings and identity reveals must happen in exactly one chapter — never repeat them.
 6. core_prompt should bundle the directives that guide the whole novel, including writing style and narrative POV, and must require a consistent POV throughout.
 7. If [Story type], [Writing style], [Narrative POV], or [Synopsis] were provided by the user and are non-empty, echo those values verbatim in the JSON — do not rewrite or expand them.
-8. Output strict JSON only. No extra prose.`,
+8. If this batch is not the final batch, do not rush or collapse the ending into it; leave natural room for later chapters.
+9. Output strict JSON only. No extra prose.`,
 
 	ChapterWriting: `Write the prose for chapter {{.ChapterNum}} of the novel "{{.Title}}".
 
@@ -290,6 +294,9 @@ Output strict JSON only.`,
 [Registered characters]
 {{.CharacterList}}
 
+[Generation range for this call]
+Generate only the next {{.NewChapterCount}} chapters starting at chapter {{.StartNum}}. The full novel has {{.TotalChapterCount}} chapters.
+
 Produce outlines for {{.NewChapterCount}} more chapters, starting at chapter {{.StartNum}}.
 
 Return JSON:
@@ -306,7 +313,8 @@ Rules:
 3. Cover opening scene, core conflict, turning point, characters with roles, and ending hook.
 4. Prefer [Registered characters]; mark new ones with "first appearance" plus a one-line description.
 5. One-time events already used in prior chapters (first meeting, identity reveal, etc.) must not be re-scheduled.
-6. Output strict JSON only.`,
+6. If this batch is not the final batch, do not rush or collapse the ending into it; leave natural room for later chapters.
+7. Output strict JSON only.`,
 
 	OutlineCharacterCheck: `You are a strict story-settings editor. Compare characters appearing in the full chapter outline against the registered character list.
 
@@ -612,4 +620,27 @@ Return JSON:
 
 Only return entries that changed. If this chapter has no memorable new details, return {"new_memories": [], "updates": []}.
 Return JSON only, nothing else.`,
+
+	StageSummaryUpdate: `You are a senior stage-summary editor for a novel. Based on a contiguous block of confirmed chapter summaries, produce one stage summary for downstream writing as medium-range context.
+
+[Novel title] {{.Title}}
+[Stage range] Chapter {{.StartChapter}} - Chapter {{.EndChapter}}
+
+[Existing stage summaries]
+{{.ExistingStageSummaries}}
+
+[Chapter summaries in this stage]
+{{.StageChapterSummaries}}
+
+Requirements:
+1. A stage summary captures medium-range continuity, not chapter-by-chapter detail
+2. Preserve: main plot progression, key conflict shifts, relationship changes, major revealed information, and unresolved problems
+3. It should be higher-level than a single chapter summary, but still directly useful for later chapter writing
+4. If a stage summary for the same range already exists, return the full updated summary
+5. Output JSON only, with no extra prose
+
+Return JSON:
+{
+  "summary": "stage summary text"
+}`,
 }

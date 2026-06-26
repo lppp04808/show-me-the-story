@@ -1,14 +1,25 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
+  import { fetchChapter } from '../lib/sse.js';
   import { postprocess, taskRunning, addToast, confirmModal, progress } from '../lib/stores.js';
   import { renderMarkdown } from '../lib/markdown.js';
   import { t } from '../lib/i18n/index.js';
 
   $: bookComplete = (() => {
     const chs = $progress?.chapters || [];
-    return chs.length > 0 && chs.every(c => c.status === 'accepted' && c.content);
+    return chs.length > 0 && chs.every(c => c.status === 'accepted');
   })();
+
+  $: ensureAcceptedChaptersLoaded($progress?.chapters || []);
+
+  function ensureAcceptedChaptersLoaded(chs) {
+    for (const ch of chs) {
+      if (ch.status === 'accepted' && !ch.content) {
+        fetchChapter(ch.num).catch(() => {});
+      }
+    }
+  }
 
   $: pp = $postprocess?.state;
   $: opts = pp?.execute_options || { run_smooth_transitions_first: true, include_polish: false };

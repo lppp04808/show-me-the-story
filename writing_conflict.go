@@ -19,11 +19,11 @@ func (e *WritingConflictError) Error() string {
 }
 
 type writingConflictAnalysis struct {
-	Reconcilable      bool                   `json:"reconcilable"`
-	Summary           string                 `json:"summary"`
-	RootCause         string                 `json:"root_cause"`
-	ExtraConstraints  string                 `json:"extra_constraints"`
-	SuggestedActions  []ConflictActionOption   `json:"suggested_actions"`
+	Reconcilable     bool                   `json:"reconcilable"`
+	Summary          string                 `json:"summary"`
+	RootCause        string                 `json:"root_cause"`
+	ExtraConstraints string                 `json:"extra_constraints"`
+	SuggestedActions []ConflictActionOption `json:"suggested_actions"`
 }
 
 func analyzeWritingConflict(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, content string, failedIssues []string, logger *LogBroadcaster) (*writingConflictAnalysis, error) {
@@ -52,7 +52,11 @@ func analyzeWritingConflict(ctx context.Context, apiCfg *APIConfig, cfg *Config,
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.WritingConflictAnalysis, userPrompt, "{{.Foreshadows}}", foreshadowBlock)
 
 	systemPrompt := SystemPromptFor(lang, "writing_conflict_analyst_json")
+
+	apiCfg.NeedJSON = true
 	rawResp := CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+	apiCfg.NeedJSON = false
+
 	if rawResp == "" {
 		return nil, fmt.Errorf("API 调用失败或被取消")
 	}
