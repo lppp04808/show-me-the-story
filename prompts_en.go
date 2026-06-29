@@ -294,7 +294,7 @@ Output strict JSON only.`,
 [Registered characters]
 {{.CharacterList}}
 
-[Generation range for this call]
+{{.UserRequirements}}[Generation range for this call]
 Generate only the next {{.NewChapterCount}} chapters starting at chapter {{.StartNum}}. The full novel has {{.TotalChapterCount}} chapters.
 
 Produce outlines for {{.NewChapterCount}} more chapters, starting at chapter {{.StartNum}}.

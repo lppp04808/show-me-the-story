@@ -28,6 +28,7 @@ type AgentContext struct {
 	CfgPath      string
 	SessionsDir  string
 	ProjectDir   string
+	Session      *ChatSession
 	StartAsync   func(taskName string, fn func(goCtx context.Context) error)
 	toolMsgKey   string
 	toolMsgArgs  []string
@@ -49,48 +50,13 @@ type ToolCall struct {
 
 func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, history []AgentStep, maxSteps int) (string, []AgentStep, error) {
 	tools := getBuiltinTools()
-	toolDesc := buildToolDescriptions(tools)
+	visibleTools := filterToolsForPage(tools, ctx.ContextPage)
+	toolDesc := buildToolDescriptions(visibleTools)
 
 	systemPrompt := buildAgentSystemPrompt(ctx, toolDesc)
 
-	var messages []Message
-	messages = append(messages, Message{Role: "system", Content: systemPrompt})
-
-	toolResultLabel := "[工具结果]"
-	if NormalizeLanguage(ctx.Config.Language) == LangEN {
-		toolResultLabel = "[Tool result]"
-	}
-
-	// 找到最后一个 user 步骤的索引（即当前轮用户消息），用于去重。
-	// handlers.go 在 agent loop 启动前就把当前用户消息追加到了 session.Messages，
-	// 所以 history 中最后一条 user 步骤与 userMessage 相同，需跳过避免重复。
-	lastUserIdx := -1
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role == "user" {
-			lastUserIdx = i
-			break
-		}
-	}
-
-	for i, step := range history {
-		if step.Role == "user" {
-			if i == lastUserIdx {
-				continue
-			}
-			messages = append(messages, Message{Role: "user", Content: step.Content})
-		} else if step.Role == "assistant" {
-			if step.ToolCall != nil {
-				tcJSON, _ := json.Marshal(step.ToolCall)
-				messages = append(messages, Message{Role: "assistant", Content: fmt.Sprintf("<tool_call>\n%s\n</tool_call>", string(tcJSON))})
-			} else {
-				messages = append(messages, Message{Role: "assistant", Content: step.Content})
-			}
-		} else if step.Role == "tool" {
-			messages = append(messages, Message{Role: "user", Content: fmt.Sprintf("%s\n%s", toolResultLabel, step.ToolResult)})
-		}
-	}
-
-	messages = append(messages, Message{Role: "user", Content: userMessage})
+	messages := []Message{{Role: "system", Content: systemPrompt}}
+	messages = append(messages, buildAgentConversationMessages(ctx, history, userMessage)...)
 
 	for step := 0; step < maxSteps; step++ {
 		if goCtx.Err() != nil {
@@ -168,12 +134,12 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 			ctx.Logger.ToolCallEnd("", toolCall.Name, truncate(result, 200), resultKey, resultArgs)
 		}
 
-		messages = append(messages, Message{Role: "assistant", Content: fmt.Sprintf("<tool_call>\n%s\n</tool_call>", func() string {
-			tcJSON, _ := json.Marshal(toolCall)
-			return string(tcJSON)
-		}())})
-		messages = append(messages, Message{Role: "user", Content: fmt.Sprintf("%s\n%s", toolResultLabel, result)})
-	}
+			messages = append(messages, Message{Role: "assistant", Content: fmt.Sprintf("<tool_call>\n%s\n</tool_call>", func() string {
+				tcJSON, _ := json.Marshal(toolCall)
+				return string(tcJSON)
+			}())})
+			messages = append(messages, Message{Role: "user", Content: formatReplayToolResultMessage(ctx, toolCall.Name, toolCall.Arguments, result, resultKey, resultArgs)})
+		}
 
 	return agentMsg(ctx, "agent.max_steps"), history, nil
 }
@@ -274,6 +240,14 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 		}
 		if name, ok := pageNames[ctx.ContextPage]; ok {
 			sb.WriteString(fmt.Sprintf("\n用户当前正在查看「%s」页面。\n", name))
+		}
+	}
+
+	if ctx.ContextPage != "" {
+		if hint := buildPageFocusHint(projectLang(ctx), ctx.ContextPage); hint != "" {
+			sb.WriteString("\n")
+			sb.WriteString(hint)
+			sb.WriteString("\n")
 		}
 	}
 
@@ -380,6 +354,11 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 		}
 		if name, ok := pageNames[ctx.ContextPage]; ok {
 			sb.WriteString(fmt.Sprintf("\nThe user is currently viewing the \"%s\" page.\n", name))
+		}
+		if hint := buildPageFocusHint(projectLang(ctx), ctx.ContextPage); hint != "" {
+			sb.WriteString("\n")
+			sb.WriteString(hint)
+			sb.WriteString("\n")
 		}
 	}
 
@@ -1372,7 +1351,7 @@ func getBuiltinTools() []Tool {
 				if err := json.Unmarshal(args, &params); err != nil {
 					return "", agentErr(ctx, "invalid_json", err)
 				}
-				if err := EditChapterOutline(ctx.State, params.Num, params.Title, params.Outline); err != nil {
+				if err := EditChapterOutline(ctx.State, params.Num, params.Title, params.Outline, nil); err != nil {
 					return "", err
 				}
 				if err := SaveProgress(ctx.ProgressPath, ctx.State); err != nil {

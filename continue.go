@@ -140,7 +140,7 @@ func ImportContinueAction(cfg *Config, state *Progress, analysis *ContinueAnalys
 	return nil
 }
 
-func GenerateContinuationOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, settings *ProjectSettings, newChapterCount int, progressPath string, logger *LogBroadcaster) error {
+func GenerateContinuationOutline(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, settings *ProjectSettings, newChapterCount int, userRequirements string, progressPath string, logger *LogBroadcaster) error {
 	logger.StepInfo(1, 2, "正在构建已有章节上下文...")
 
 	lang := cfg.Language
@@ -150,7 +150,7 @@ func GenerateContinuationOutline(ctx context.Context, apiCfg *APIConfig, cfg *Co
 	}
 	checkpointPath := OutlineCheckpointPath(progressPath)
 
-	fingerprint := BuildContinuationOutlineFingerprint(cfg, state, settings, newChapterCount)
+	fingerprint := BuildContinuationOutlineFingerprint(cfg, state, settings, newChapterCount, userRequirements)
 
 	startNum := len(state.Chapters) + 1
 	batchSize := outlineBatchSizeDefault
@@ -183,7 +183,7 @@ func GenerateContinuationOutline(ctx context.Context, apiCfg *APIConfig, cfg *Co
 		if logger != nil {
 			logger.Info(formatOutlineBatchProgress(nextNum, currentBatchSize, len(generated), newChapterCount, lang))
 		}
-		existingOutline := buildContinuationExistingOutline(state.Chapters, generated, lang)
+		existingOutline := buildContinuationPromptContext(state.Chapters, generated, userRequirements, lang)
 		chapters, err := generateOutlineChaptersOnly(ctx, apiCfg, cfg, settings, cfg.Prompts.ContinuationOutlineGeneration, map[string]string{
 			"Title":             state.Title,
 			"StoryType":         snapshot.Type,
@@ -260,6 +260,18 @@ func GenerateContinuationOutline(ctx context.Context, apiCfg *APIConfig, cfg *Co
 
 	logger.InfoKey("log.continuation_outline_summary", len(generated), len(state.Chapters))
 	return nil
+}
+
+func buildContinuationPromptContext(existing []ChapterState, generated []OutlineChapter, userRequirements string, lang string) string {
+	base := buildContinuationExistingOutline(existing, generated, lang)
+	requirements := strings.TrimSpace(userRequirements)
+	if requirements == "" {
+		return base
+	}
+	if NormalizeLanguage(lang) == LangEN {
+		return base + "\n[Extra requirements for the newly generated chapters]\n" + requirements + "\n"
+	}
+	return base + "\n【本次新增章节的额外要求】\n" + requirements + "\n"
 }
 
 func buildContinuationExistingOutline(existing []ChapterState, generated []OutlineChapter, lang string) string {

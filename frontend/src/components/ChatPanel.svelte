@@ -13,12 +13,14 @@
   let inputEl;
   let showSessionList = false;
   let autoScroll = true;
+  let contextStats = null;
 
   $: sessions = ($chatSessions?.sessions || []);
   $: msgs = ($currentChatSession?.messages || []);
   $: streamingText = $currentChatSession?.streaming_text || '';
   $: pendingTools = $currentChatSession?.pending_tool_calls || [];
   $: taskLogs = ($logEntries || []).slice(-20);
+  $: contextStats = buildContextStats(msgs, pendingTools, streamingText);
   let taskStatusCollapsed = false;
 
   const dangerTools = new Set(['delete_chapter', 'delete_chapters_from', 'delete_outline', 'reset_progress']);
@@ -43,6 +45,23 @@
       const tag = $uiLocale === 'en' ? 'en-US' : 'zh-CN';
       return new Date(ts).toLocaleTimeString(tag, { hour12: false, hour: '2-digit', minute: '2-digit' });
     } catch { return ''; }
+  }
+  function estimateMessageChars(items) {
+    return (items || []).reduce((sum, m) => sum
+      + (m.content || '').length
+      + (m.tool_result || '').length
+      + JSON.stringify(m.tool_calls || []).length, 0);
+  }
+  function buildContextStats(messages, pending, streaming) {
+    const msgCount = (messages || []).length;
+    const toolCount = (messages || []).filter(m => m.role === 'tool').length + (pending || []).length;
+    const chars = estimateMessageChars(messages) + (streaming || '').length;
+    return {
+      msgCount,
+      toolCount,
+      chars,
+      shouldSuggestNew: msgCount >= 24 || chars >= 12000,
+    };
   }
 
   // 重试 API 端点映射
@@ -130,6 +149,22 @@
       await createSession();
     }
     chatInput = text;
+    await sendMessage();
+  }
+
+  export async function sendBriefMessageToChat(text, topic = '') {
+    if (!$currentChatSession) {
+      await createSession();
+    }
+    const prefix = contextPage === 'config'
+      ? ($uiLocale === 'en' ? 'Use current project settings directly; do not ask me to paste them again.' : '请直接基于当前项目设定处理，不要让我重复粘贴。')
+      : contextPage === 'writing'
+        ? ($uiLocale === 'en' ? 'Use current project state and writing frontier directly.' : '请直接基于当前项目状态和写作前沿处理。')
+        : ($uiLocale === 'en' ? 'Use current project state directly.' : '请直接基于当前项目状态处理。');
+    const scoped = topic
+      ? `${prefix}\n${$uiLocale === 'en' ? 'Topic' : '主题'}: ${topic}\n${text}`
+      : `${prefix}\n${text}`;
+    chatInput = scoped;
     await sendMessage();
   }
 
@@ -328,6 +363,16 @@
             {/each}
           </div>
         </div>
+      {:else if contextStats}
+        <div class="sticky top-0 z-10 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-base-content/10 bg-base-200/90 px-2 py-1 text-[11px] text-base-content/50 backdrop-blur">
+          <span class="badge badge-ghost badge-xs">{$t('chat.context.msgs', { n: contextStats.msgCount })}</span>
+          <span class="badge badge-ghost badge-xs">{$t('chat.context.tools', { n: contextStats.toolCount })}</span>
+          <span class="badge badge-ghost badge-xs">{$t('chat.context.chars', { n: contextStats.chars })}</span>
+          {#if contextStats.shouldSuggestNew}
+            <span class="badge badge-warning badge-xs">{$t('chat.context.suggestNew')}</span>
+            <button class="btn btn-ghost btn-xs" on:click={createSession} disabled={$taskRunning}>{$t('chat.context.newSession')}</button>
+          {/if}
+        </div>
       {/if}
       {#each msgs as m, msgIdx}
         {#if m.role === 'user'}
@@ -441,7 +486,7 @@
     <div class="border-t border-base-content/10 p-2 flex gap-2 items-end shrink-0">
       <textarea
         bind:this={inputEl}
-        class="textarea textarea-sm flex-1 min-h-[38px] max-h-[120px] resize-none text-base leading-relaxed"
+        class="textarea textarea-sm flex-1 min-h-9.5 max-h-30 resize-none text-base leading-relaxed"
         bind:value={chatInput}
         placeholder={$taskRunning ? $t('chat.input.placeholderBusy') : $t('chat.input.placeholder')}
         on:keydown={handleKeydown}

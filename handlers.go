@@ -525,6 +525,188 @@ func (h *Handlers) GetOutlineCheckpoint(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+func (h *Handlers) PostOutlineManual(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+
+	for _, ch := range h.state.Chapters {
+		if ch.Status == StatusWriting || ch.Status == StatusReview {
+			h.writeErrorReq(w, r, http.StatusConflict, "writing_chapter_present")
+			return
+		}
+		if ch.Status == StatusAccepted {
+			h.writeErrorReq(w, r, http.StatusConflict, "accepted_chapter_present")
+			return
+		}
+	}
+
+	var body struct {
+		ChapterCount int `json:"chapter_count"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if body.ChapterCount <= 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "manual_outline_chapter_count_required")
+		return
+	}
+
+	if err := CreateManualOutlineAction(h.cfg, h.state, h.progressPath, h.cfgPath, body.ChapterCount); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "manual_outline_create_failed", err.Error())
+		return
+	}
+
+	h.logger.SuccessKey("log.manual_outline_created", body.ChapterCount)
+	h.writeJSON(w, http.StatusOK, h.state)
+}
+
+func (h *Handlers) PostOutlineAppendManual(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+	if len(h.state.Chapters) == 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "outline_empty")
+		return
+	}
+	for _, ch := range h.state.Chapters {
+		if ch.Status == StatusWriting || ch.Status == StatusReview {
+			h.writeErrorReq(w, r, http.StatusConflict, "writing_chapter_present")
+			return
+		}
+	}
+
+	var body struct {
+		ChapterCount int    `json:"chapter_count"`
+		Content      string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Content) != "" {
+		if err := AppendManualOutlineChaptersFromTextAction(h.cfg, h.state, h.progressPath, h.cfgPath, body.Content); err != nil {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "manual_outline_parse_failed", err.Error())
+			return
+		}
+		h.logger.SuccessKey("log.manual_outline_batch_appended", len(h.state.Chapters))
+		h.writeJSON(w, http.StatusOK, h.state)
+		return
+	}
+	if body.ChapterCount <= 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "manual_outline_chapter_count_required")
+		return
+	}
+
+	if err := AppendManualOutlineChaptersAction(h.cfg, h.state, h.progressPath, h.cfgPath, body.ChapterCount); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "manual_outline_append_failed", err.Error())
+		return
+	}
+
+	h.logger.SuccessKey("log.manual_outline_appended", body.ChapterCount, len(h.state.Chapters))
+	h.writeJSON(w, http.StatusOK, h.state)
+}
+
+func (h *Handlers) DeleteOutlineChapter(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+
+	numStr := r.PathValue("num")
+	var num int
+	if _, err := fmt.Sscanf(numStr, "%d", &num); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num")
+		return
+	}
+
+	if err := DeletePendingOutlineChapterAction(h.cfg, h.state, h.progressPath, h.cfgPath, num); err != nil {
+		switch err {
+		case ErrOutlineChapterNotFound:
+			h.writeErrorReq(w, r, http.StatusNotFound, "chapter_n_not_found", num)
+		case ErrOutlineChapterNotPending:
+			h.writeErrorReq(w, r, http.StatusConflict, "outline_delete_pending_only")
+		default:
+			h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err.Error())
+		}
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, h.state)
+}
+
+func (h *Handlers) DeleteOutlineChapters(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+
+	var body struct {
+		ChapterNums []int `json:"chapter_nums"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+
+	if _, err := DeletePendingOutlineChaptersAction(h.cfg, h.state, h.progressPath, h.cfgPath, body.ChapterNums); err != nil {
+		switch err {
+		case ErrOutlineNoChaptersSelected:
+			h.writeErrorReq(w, r, http.StatusBadRequest, "outline_no_selection")
+		case ErrOutlineChapterNotFound:
+			h.writeErrorReq(w, r, http.StatusNotFound, "chapter_not_found")
+		case ErrOutlineChapterNotPending:
+			h.writeErrorReq(w, r, http.StatusConflict, "outline_delete_pending_only")
+		default:
+			h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err.Error())
+		}
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, h.state)
+}
+
+func (h *Handlers) DeleteOutlineChaptersFrom(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+
+	numStr := r.PathValue("num")
+	var num int
+	if _, err := fmt.Sscanf(numStr, "%d", &num); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num")
+		return
+	}
+
+	if _, err := DeletePendingOutlineChaptersFromAction(h.cfg, h.state, h.progressPath, h.cfgPath, num); err != nil {
+		switch err {
+		case ErrOutlineChapterNotFound:
+			h.writeErrorReq(w, r, http.StatusNotFound, "chapter_n_not_found", num)
+		case ErrOutlineDeleteRangeNotPending:
+			h.writeErrorReq(w, r, http.StatusConflict, "outline_delete_range_pending_only")
+		default:
+			h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err.Error())
+		}
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, h.state)
+}
+
 func (h *Handlers) DeleteOutlineCheckpoint(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -623,6 +805,10 @@ func (h *Handlers) PostOutlineConfirm(w http.ResponseWriter, r *http.Request) {
 
 	if len(h.state.Chapters) == 0 {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "outline_empty")
+		return
+	}
+	if chapterNum := firstIncompleteOutlineChapter(h.state); chapterNum > 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "outline_incomplete_confirm", chapterNum)
 		return
 	}
 
@@ -1175,15 +1361,16 @@ func (h *Handlers) PutChapterOutline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Title   string `json:"title"`
-		Outline string `json:"outline"`
+		Title                 string `json:"title"`
+		Outline               string `json:"outline"`
+		SelectedForeshadowIDs *[]int `json:"selected_foreshadow_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
 
-	if err := EditChapterOutline(h.state, num, body.Title, body.Outline); err != nil {
+	if err := EditChapterOutline(h.state, num, body.Title, body.Outline, body.SelectedForeshadowIDs); err != nil {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
@@ -1417,7 +1604,7 @@ func (h *Handlers) PostForeshadow(w http.ResponseWriter, r *http.Request) {
 		Name          string `json:"name"`
 		Description   string `json:"description"`
 		PlantChapter  int    `json:"plant_chapter"`
-		TargetChapter int    `json:"target_chapter"`
+		TargetChapter *int   `json:"target_chapter"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
@@ -1432,12 +1619,20 @@ func (h *Handlers) PostForeshadow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	targetChapter := 0
+	if req.TargetChapter != nil {
+		targetChapter = *req.TargetChapter
+		if targetChapter < 0 {
+			targetChapter = 0
+		}
+	}
+
 	fs := Foreshadow{
 		ID:            NextForeshadowID(h.state.Foreshadows),
 		Name:          req.Name,
 		Description:   req.Description,
 		PlantChapter:  req.PlantChapter,
-		TargetChapter: req.TargetChapter,
+		TargetChapter: targetChapter,
 		Status:        ForeshadowPlanted,
 		Events:        []ForeshadowEvent{},
 	}
@@ -1468,7 +1663,7 @@ func (h *Handlers) PutForeshadow(w http.ResponseWriter, r *http.Request) {
 		Name          string           `json:"name"`
 		Description   string           `json:"description"`
 		PlantChapter  int              `json:"plant_chapter"`
-		TargetChapter int              `json:"target_chapter"`
+		TargetChapter *int             `json:"target_chapter"`
 		Status        ForeshadowStatus `json:"status"`
 		Resolution    string           `json:"resolution"`
 	}
@@ -1499,8 +1694,12 @@ func (h *Handlers) PutForeshadow(w http.ResponseWriter, r *http.Request) {
 	if req.PlantChapter > 0 {
 		fs.PlantChapter = req.PlantChapter
 	}
-	if req.TargetChapter > 0 {
-		fs.TargetChapter = req.TargetChapter
+	if req.TargetChapter != nil {
+		targetChapter := *req.TargetChapter
+		if targetChapter < 0 {
+			targetChapter = 0
+		}
+		fs.TargetChapter = targetChapter
 	}
 	if req.Status != "" {
 		fs.Status = req.Status
@@ -1674,17 +1873,17 @@ func (h *Handlers) PostOutlineGenerateContinuation(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if h.state.Phase != "outline" {
-		h.endTask()
-		h.writeErrorReq(w, r, http.StatusBadRequest, "phase_not_outline")
+	var body struct {
+		ChapterCount     int    `json:"chapter_count"`
+		UserRequirements string `json:"user_requirements"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-
-	var body struct {
-		ChapterCount int `json:"chapter_count"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ChapterCount <= 0 {
-		body.ChapterCount = 5
+	if body.ChapterCount <= 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "manual_outline_chapter_count_required")
+		return
 	}
 
 	go func() {
@@ -1693,7 +1892,7 @@ func (h *Handlers) PostOutlineGenerateContinuation(w http.ResponseWriter, r *htt
 		ctx := h.taskCtx
 
 		h.logger.InfoKey("log.continuation_outline_generating")
-		err := GenerateContinuationOutline(ctx, h.apiCfg, h.cfg, h.state, h.settings, body.ChapterCount, h.progressPath, h.logger)
+		err := GenerateContinuationOutline(ctx, h.apiCfg, h.cfg, h.state, h.settings, body.ChapterCount, body.UserRequirements, h.progressPath, h.logger)
 
 		if err != nil {
 			if ctx.Err() != nil {
@@ -2667,6 +2866,8 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 			CfgPath:      h.cfgPath,
 			SessionsDir:  h.sessionsDir,
 			ProjectDir:   filepath.Join(h.progDir, "storys", h.projectName),
+				Session:      session,
+
 			StartAsync: func(taskName string, fn func(goCtx context.Context) error) {
 				// 子任务必须计入 activeWork，否则 Agent 主循环结束后锁被释放，
 				// 子任务仍在运行时新任务可并发进入，造成数据竞争。

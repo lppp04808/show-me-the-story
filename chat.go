@@ -9,11 +9,12 @@ import (
 )
 
 type ChatSession struct {
-	ID        string        `json:"id"`
-	Title     string        `json:"title"`
-	Messages  []ChatMessage `json:"messages"`
-	CreatedAt string        `json:"created_at"`
-	UpdatedAt string        `json:"updated_at"`
+	ID        string             `json:"id"`
+	Title     string             `json:"title"`
+	Messages  []ChatMessage      `json:"messages"`
+	Digest    *ChatSessionDigest `json:"digest,omitempty"`
+	CreatedAt string             `json:"created_at"`
+	UpdatedAt string             `json:"updated_at"`
 }
 
 type ChatMessage struct {
@@ -31,11 +32,12 @@ type ChatSessionIndex struct {
 }
 
 type ChatSessionMeta struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-	MsgCount  int    `json:"msg_count"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	MsgCount    int    `json:"msg_count"`
+	DigestSteps int    `json:"digest_steps,omitempty"`
 }
 
 func chatSessionsDir(baseDir string) string {
@@ -110,6 +112,7 @@ func SaveChatSession(baseDir string, session *ChatSession) error {
 	os.MkdirAll(dir, 0755)
 
 	path := filepath.Join(dir, session.ID+".json")
+	refreshChatSessionDigest(session, LangZH)
 	data, err := json.MarshalIndent(session, "", "  ")
 	if err != nil {
 		return err
@@ -158,6 +161,11 @@ func updateChatIndex(baseDir string, session *ChatSession) error {
 			idx.Sessions[i].Title = session.Title
 			idx.Sessions[i].UpdatedAt = session.UpdatedAt
 			idx.Sessions[i].MsgCount = len(session.Messages)
+			if session.Digest != nil {
+				idx.Sessions[i].DigestSteps = session.Digest.CoveredSteps
+			} else {
+				idx.Sessions[i].DigestSteps = 0
+			}
 			found = true
 			break
 		}
@@ -165,11 +173,17 @@ func updateChatIndex(baseDir string, session *ChatSession) error {
 
 	if !found {
 		idx.Sessions = append(idx.Sessions, ChatSessionMeta{
-			ID:        session.ID,
-			Title:     session.Title,
-			CreatedAt: session.CreatedAt,
-			UpdatedAt: session.UpdatedAt,
-			MsgCount:  len(session.Messages),
+			ID:          session.ID,
+			Title:       session.Title,
+			CreatedAt:   session.CreatedAt,
+			UpdatedAt:   session.UpdatedAt,
+			MsgCount:    len(session.Messages),
+			DigestSteps: func() int {
+				if session.Digest != nil {
+					return session.Digest.CoveredSteps
+				}
+				return 0
+			}(),
 		})
 	}
 

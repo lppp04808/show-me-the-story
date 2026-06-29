@@ -132,6 +132,22 @@ var messageCatalog = map[string]map[string]string{
 		LangZH: "大纲已删除。",
 		LangEN: "Outline deleted.",
 	},
+	"log.manual_outline_created": {
+		LangZH: "已创建手动大纲骨架，共 %d 章。",
+		LangEN: "Created a manual outline scaffold with %d chapters.",
+	},
+	"log.manual_outline_appended": {
+		LangZH: "已手动追加 %d 章大纲，当前共 %d 章。",
+		LangEN: "Appended %d manual outline chapters; total chapters: %d.",
+	},
+	"log.manual_outline_batch_appended": {
+		LangZH: "已批量追加章节，当前共 %d 章。",
+		LangEN: "Batch-appended chapters; total chapters: %d.",
+	},
+	"log.outline_pending_deleted": {
+		LangZH: "已删除 %d 个待写作章节。",
+		LangEN: "Deleted %d pending outline chapters.",
+	},
 	"log.chapter_outline_updated": {
 		LangZH: "第 %d 章大纲已更新。",
 		LangEN: "Chapter %d outline updated.",

@@ -85,6 +85,53 @@ func TestBuildOutlineBatchHint(t *testing.T) {
 	}
 }
 
+func TestDeletePendingOutlineChaptersRejectsEmptySelection(t *testing.T) {
+	state := &Progress{Chapters: []ChapterState{{Num: 1, Status: StatusPending}}}
+	if _, err := DeletePendingOutlineChapters(state, nil); err != ErrOutlineNoChaptersSelected {
+		t.Fatalf("DeletePendingOutlineChapters() error = %v, want %v", err, ErrOutlineNoChaptersSelected)
+	}
+}
+
+func TestDeletePendingOutlineChaptersFromRejectsNonPendingTail(t *testing.T) {
+	state := &Progress{Chapters: []ChapterState{{Num: 1, Status: StatusAccepted}, {Num: 2, Status: StatusPending}, {Num: 3, Status: StatusAccepted}}}
+	if _, err := DeletePendingOutlineChaptersFrom(state, 2); err != ErrOutlineDeleteRangeNotPending {
+		t.Fatalf("DeletePendingOutlineChaptersFrom() error = %v, want %v", err, ErrOutlineDeleteRangeNotPending)
+	}
+}
+
+func TestDeletePendingOutlineChapterRejectsNonPending(t *testing.T) {
+	state := &Progress{Chapters: []ChapterState{{Num: 1, Status: StatusAccepted}}}
+	if err := DeletePendingOutlineChapter(state, 1); err != ErrOutlineChapterNotPending {
+		t.Fatalf("DeletePendingOutlineChapter() error = %v, want %v", err, ErrOutlineChapterNotPending)
+	}
+}
+
+func TestExtractManualOutlineTitle(t *testing.T) {
+	if got := extractManualOutlineTitle("第66章《返程结算》", 66, LangZH); got != "返程结算" {
+		t.Fatalf("extractManualOutlineTitle zh = %q, want 返程结算", got)
+	}
+	if got := extractManualOutlineTitle("Chapter 67: The New Door", 67, LangEN); got != "The New Door" {
+		t.Fatalf("extractManualOutlineTitle en = %q, want The New Door", got)
+	}
+}
+
+func TestFirstIncompleteOutlineChapter(t *testing.T) {
+	state := &Progress{Chapters: []ChapterState{
+		{Num: 1, Title: "第一章", Outline: "已完成"},
+		{Num: 2, Title: "", Outline: "缺标题"},
+		{Num: 3, Title: "第三章", Outline: ""},
+	}}
+	if got := firstIncompleteOutlineChapter(state); got != 2 {
+		t.Fatalf("firstIncompleteOutlineChapter() = %d, want 2", got)
+	}
+
+	state.Chapters[1].Title = "第二章"
+	state.Chapters[2].Outline = "已完成"
+	if got := firstIncompleteOutlineChapter(state); got != 0 {
+		t.Fatalf("firstIncompleteOutlineChapter() = %d, want 0", got)
+	}
+}
+
 func stringsRepeat(s string, n int) string {
 	out := ""
 	for i := 0; i < n; i++ {

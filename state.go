@@ -8,12 +8,13 @@ import (
 )
 
 type ChapterState struct {
-	Num     int    `json:"num"`
-	Title   string `json:"title"`
-	Outline string `json:"outline"`
-	Content string `json:"content"`
-	Summary string `json:"summary"`
-	Status  string `json:"status"` // pending | writing | review | accepted
+	Num                   int    `json:"num"`
+	Title                 string `json:"title"`
+	Outline               string `json:"outline"`
+	Content               string `json:"content"`
+	Summary               string `json:"summary"`
+	Status                string `json:"status"` // pending | writing | review | accepted
+	SelectedForeshadowIDs []int  `json:"selected_foreshadow_ids,omitempty"`
 }
 
 type ForeshadowStatus string
@@ -121,13 +122,14 @@ func ProgressWithoutContent(p *Progress) *Progress {
 }
 
 type storedChapterState struct {
-	Num         int    `json:"num"`
-	Title       string `json:"title,omitempty"`
-	Outline     string `json:"outline,omitempty"`
-	Content     string `json:"content,omitempty"`
-	ContentPath string `json:"content_path,omitempty"`
-	Summary     string `json:"summary,omitempty"`
-	Status      string `json:"status,omitempty"`
+	Num                   int    `json:"num"`
+	Title                 string `json:"title,omitempty"`
+	Outline               string `json:"outline,omitempty"`
+	Content               string `json:"content,omitempty"`
+	ContentPath           string `json:"content_path,omitempty"`
+	Summary               string `json:"summary,omitempty"`
+	Status                string `json:"status,omitempty"`
+	SelectedForeshadowIDs []int  `json:"selected_foreshadow_ids,omitempty"`
 }
 
 type storedProgress struct {
@@ -202,12 +204,13 @@ func LoadProgress(path string) (*Progress, error) {
 			content = string(body)
 		}
 		p.Chapters[i] = ChapterState{
-			Num:     meta.Num,
-			Title:   meta.Title,
-			Outline: meta.Outline,
-			Content: content,
-			Summary: meta.Summary,
-			Status:  meta.Status,
+			Num:                   meta.Num,
+			Title:                 meta.Title,
+			Outline:               meta.Outline,
+			Content:               content,
+			Summary:               meta.Summary,
+			Status:                meta.Status,
+			SelectedForeshadowIDs: meta.SelectedForeshadowIDs,
 		}
 	}
 
@@ -247,12 +250,13 @@ func SaveProgress(path string, p *Progress) error {
 		stored.Chapters[i] = storedChapterState{Num: ch.Num, ContentPath: contentPath}
 
 		meta := storedChapterState{
-			Num:         ch.Num,
-			Title:       ch.Title,
-			Outline:     ch.Outline,
-			Summary:     ch.Summary,
-			Status:      ch.Status,
-			ContentPath: contentPath,
+			Num:                   ch.Num,
+			Title:                 ch.Title,
+			Outline:               ch.Outline,
+			Summary:               ch.Summary,
+			Status:                ch.Status,
+			ContentPath:           contentPath,
+			SelectedForeshadowIDs: ch.SelectedForeshadowIDs,
 		}
 		metaPath := ChapterMetaPath(projectDir, ch.Num)
 		if err := saveJSONSidecar(metaPath, meta); err != nil {
@@ -464,8 +468,9 @@ func ChapterMarkdownPath(projectDir string, num int) string {
 }
 
 func SaveChapterMarkdown(projectDir string, ch ChapterState, title string) {
-	content := fmt.Sprintf("# 第 %d 章: %s\n\n> **本章摘要**：%s\n\n---\n\n%s", ch.Num, ch.Title, ch.Summary, ch.Content)
-	_ = os.WriteFile(ChapterMarkdownPath(projectDir, ch.Num), []byte(content), 0644)
+	return
+	// content := fmt.Sprintf("# 第 %d 章: %s\n\n> **本章摘要**：%s\n\n---\n\n%s", ch.Num, ch.Title, ch.Summary, ch.Content)
+	// _ = os.WriteFile(ChapterMarkdownPath(projectDir, ch.Num), []byte(content), 0644)
 }
 
 // ForeshadowRoadmapPath returns the foreshadow roadmap markdown path inside the project directory.

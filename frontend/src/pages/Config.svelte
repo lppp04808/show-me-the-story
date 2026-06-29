@@ -5,7 +5,7 @@
   import { t } from '../lib/i18n/index.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
 
-  export let sendToChat = async () => {};
+  export let sendBriefToChat = async () => {};
 
   function stripNameMarks(name) {
     return (name.startsWith('「') && name.endsWith('」')) ? name.slice(1, -1) : name;
@@ -206,8 +206,8 @@
 
   async function submitCharacters() {
     if (chars.length === 0) { addToast($t('config.char.noneToSubmit'), 'error'); return; }
-    const lines = chars.map(c => `- ${c.name}${c.age ? ', ' + c.age : ''}${c.personality ? ', ' + c.personality : ''}`).join('\n');
-    await sendToChat($t('config.char.submitMsg', { n: chars.length, lines }));
+    const names = chars.slice(0, 6).map(c => c.name).join('、');
+    await sendBriefToChat($t('config.char.submitMsg', { n: chars.length, names }), $t('config.char.submitTopic'));
     addToast($t('config.char.submitted'), 'success');
   }
 
@@ -257,8 +257,8 @@
 
   async function submitWorldview() {
     if (allWvs.length === 0) { addToast($t('config.wv.noneToSubmit'), 'error'); return; }
-    const lines = allWvs.map(w => `- [${catLabels[w.category] || w.category}] ${w.name}: ${w.description.slice(0, 50)}`).join('\n');
-    await sendToChat($t('config.wv.submitMsg', { n: allWvs.length, lines }));
+    const names = allWvs.slice(0, 6).map(w => w.name).join('、');
+    await sendBriefToChat($t('config.wv.submitMsg', { n: allWvs.length, names }), $t('config.wv.submitTopic'));
     addToast($t('config.wv.submitted'), 'success');
   }
 

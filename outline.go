@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -410,6 +412,361 @@ func cleanJSONResponse(s string) string {
 	return strings.TrimSpace(s)
 }
 
+var ErrOutlineChapterNotPending = errors.New("outline chapter not pending")
+var ErrOutlineChapterNotFound = errors.New("outline chapter not found")
+var ErrOutlineNoChaptersSelected = errors.New("no outline chapters selected")
+var ErrOutlineDeleteRangeNotPending = errors.New("outline delete range not pending")
+
+func persistOutlineChapterMutation(cfg *Config, state *Progress, progressPath, cfgPath string) error {
+	cfg.Story.ChapterCount = len(state.Chapters)
+	if state.StoryConfigSnapshot != nil {
+		snapshot := *state.StoryConfigSnapshot
+		snapshot.ChapterCount = len(state.Chapters)
+		state.StoryConfigSnapshot = &snapshot
+	} else {
+		snapshot := cfg.Story
+		state.StoryConfigSnapshot = &snapshot
+	}
+	if err := saveConfig(cfgPath, cfg); err != nil {
+		return fmt.Errorf("保存配置失败: %w", err)
+	}
+	if err := SaveProgress(progressPath, state); err != nil {
+		return fmt.Errorf("保存进度失败: %w", err)
+	}
+	return nil
+}
+
+func DeletePendingOutlineChapterAction(cfg *Config, state *Progress, progressPath, cfgPath string, chapterNum int) error {
+	_, err := DeletePendingOutlineChaptersAction(cfg, state, progressPath, cfgPath, []int{chapterNum})
+	return err
+}
+
+func DeletePendingOutlineChaptersAction(cfg *Config, state *Progress, progressPath, cfgPath string, chapterNums []int) (int, error) {
+	deletedCount, err := DeletePendingOutlineChapters(state, chapterNums)
+	if err != nil {
+		return 0, err
+	}
+	if err := persistOutlineChapterMutation(cfg, state, progressPath, cfgPath); err != nil {
+		return 0, err
+	}
+	return deletedCount, nil
+}
+
+func DeletePendingOutlineChaptersFromAction(cfg *Config, state *Progress, progressPath, cfgPath string, startNum int) (int, error) {
+	deletedCount, err := DeletePendingOutlineChaptersFrom(state, startNum)
+	if err != nil {
+		return 0, err
+	}
+	if err := persistOutlineChapterMutation(cfg, state, progressPath, cfgPath); err != nil {
+		return 0, err
+	}
+	return deletedCount, nil
+}
+
+func DeletePendingOutlineChapter(state *Progress, chapterNum int) error {
+	_, err := DeletePendingOutlineChapters(state, []int{chapterNum})
+	return err
+}
+
+func DeletePendingOutlineChapters(state *Progress, chapterNums []int) (int, error) {
+	nums := normalizeOutlineChapterNums(chapterNums)
+	if len(nums) == 0 {
+		return 0, ErrOutlineNoChaptersSelected
+	}
+
+	indexByNum := make(map[int]int, len(state.Chapters))
+	for i, ch := range state.Chapters {
+		indexByNum[ch.Num] = i
+	}
+	for _, num := range nums {
+		idx, ok := indexByNum[num]
+		if !ok {
+			return 0, ErrOutlineChapterNotFound
+		}
+		if state.Chapters[idx].Status != StatusPending {
+			return 0, ErrOutlineChapterNotPending
+		}
+	}
+
+	deleteSet := make(map[int]bool, len(nums))
+	deletedBeforeCurrent := 0
+	for _, num := range nums {
+		deleteSet[num] = true
+		if indexByNum[num] < state.CurrentChapterIndex {
+			deletedBeforeCurrent++
+		}
+	}
+
+	kept := make([]ChapterState, 0, len(state.Chapters)-len(nums))
+	for _, ch := range state.Chapters {
+		if deleteSet[ch.Num] {
+			continue
+		}
+		ch.Num = len(kept) + 1
+		kept = append(kept, ch)
+	}
+	state.Chapters = kept
+	state.CurrentChapterIndex -= deletedBeforeCurrent
+	if state.CurrentChapterIndex < 0 {
+		state.CurrentChapterIndex = 0
+	}
+	if state.CurrentChapterIndex > len(state.Chapters) {
+		state.CurrentChapterIndex = len(state.Chapters)
+	}
+	shiftOutlineReferencesAfterDeletes(state, nums)
+	return len(nums), nil
+}
+
+func DeletePendingOutlineChaptersFrom(state *Progress, startNum int) (int, error) {
+	startIdx := -1
+	for i, ch := range state.Chapters {
+		if ch.Num == startNum {
+			startIdx = i
+			break
+		}
+	}
+	if startIdx == -1 {
+		return 0, ErrOutlineChapterNotFound
+	}
+	for i := startIdx; i < len(state.Chapters); i++ {
+		if state.Chapters[i].Status != StatusPending {
+			return 0, ErrOutlineDeleteRangeNotPending
+		}
+	}
+	chapterNums := make([]int, 0, len(state.Chapters)-startIdx)
+	for i := startIdx; i < len(state.Chapters); i++ {
+		chapterNums = append(chapterNums, state.Chapters[i].Num)
+	}
+	return DeletePendingOutlineChapters(state, chapterNums)
+}
+
+func normalizeOutlineChapterNums(nums []int) []int {
+	filtered := make([]int, 0, len(nums))
+	for _, num := range nums {
+		if num > 0 {
+			filtered = append(filtered, num)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	sort.Ints(filtered)
+	out := filtered[:1]
+	for _, num := range filtered[1:] {
+		if num != out[len(out)-1] {
+			out = append(out, num)
+		}
+	}
+	return out
+}
+
+func shiftOutlineReferencesAfterDeletes(state *Progress, deletedChapterNums []int) {
+	deleteSet := make(map[int]bool, len(deletedChapterNums))
+	for _, num := range deletedChapterNums {
+		deleteSet[num] = true
+	}
+	for i := range state.Foreshadows {
+		if state.Foreshadows[i].PlantChapter > 0 {
+			state.Foreshadows[i].PlantChapter -= countDeletedChaptersLE(deletedChapterNums, state.Foreshadows[i].PlantChapter)
+		}
+		if state.Foreshadows[i].TargetChapter > 0 {
+			state.Foreshadows[i].TargetChapter -= countDeletedChaptersLE(deletedChapterNums, state.Foreshadows[i].TargetChapter)
+		}
+		if len(state.Foreshadows[i].Events) == 0 {
+			continue
+		}
+		filtered := state.Foreshadows[i].Events[:0]
+		for _, ev := range state.Foreshadows[i].Events {
+			if deleteSet[ev.Chapter] {
+				continue
+			}
+			if ev.Chapter > 0 {
+				ev.Chapter -= countDeletedChaptersLT(deletedChapterNums, ev.Chapter)
+			}
+			filtered = append(filtered, ev)
+		}
+		state.Foreshadows[i].Events = filtered
+	}
+	for i := range state.MemoryEntries {
+		if state.MemoryEntries[i].Chapter > 0 {
+			state.MemoryEntries[i].Chapter -= countDeletedChaptersLT(deletedChapterNums, state.MemoryEntries[i].Chapter)
+		}
+	}
+}
+
+func countDeletedChaptersLE(deletedChapterNums []int, chapterNum int) int {
+	return sort.Search(len(deletedChapterNums), func(i int) bool { return deletedChapterNums[i] > chapterNum })
+}
+
+func countDeletedChaptersLT(deletedChapterNums []int, chapterNum int) int {
+	return sort.SearchInts(deletedChapterNums, chapterNum)
+}
+
+func CreateManualOutlineAction(cfg *Config, state *Progress, progressPath, cfgPath string, chapterCount int) error {
+	if chapterCount <= 0 {
+		return fmt.Errorf("章节数必须大于 0")
+	}
+
+	cfg.Story.ChapterCount = chapterCount
+	state.Phase = "outline"
+	state.Title = cfg.Story.Title
+	state.CorePrompt = ""
+	state.StorySynopsis = cfg.Story.StorySynopsis
+	state.CurrentChapterIndex = 0
+	state.LastForeshadowOutlineReport = nil
+	state.LastOutlineCharacterReport = nil
+	state.PendingWritingConflict = nil
+	state.Chapters = buildManualOutlineChapters(1, chapterCount, cfg.Language)
+
+	snapshot := cfg.Story
+	state.StoryConfigSnapshot = &snapshot
+
+	if err := saveConfig(cfgPath, cfg); err != nil {
+		return fmt.Errorf("保存配置失败: %w", err)
+	}
+	if err := SaveProgress(progressPath, state); err != nil {
+		return fmt.Errorf("保存进度失败: %w", err)
+	}
+	_ = DeleteOutlineCheckpoint(OutlineCheckpointPath(progressPath))
+	return nil
+}
+
+func AppendManualOutlineChaptersAction(cfg *Config, state *Progress, progressPath, cfgPath string, chapterCount int) error {
+	if chapterCount <= 0 {
+		return fmt.Errorf("章节数必须大于 0")
+	}
+	startNum := len(state.Chapters) + 1
+	return appendManualOutlineChapterStates(cfg, state, progressPath, cfgPath, buildManualOutlineChapters(startNum, chapterCount, cfg.Language))
+}
+
+func AppendManualOutlineChaptersFromTextAction(cfg *Config, state *Progress, progressPath, cfgPath, content string) error {
+	chapters, err := parseManualOutlineChapters(content, len(state.Chapters)+1, cfg.Language)
+	if err != nil {
+		return err
+	}
+	return appendManualOutlineChapterStates(cfg, state, progressPath, cfgPath, chapters)
+}
+
+func appendManualOutlineChapterStates(cfg *Config, state *Progress, progressPath, cfgPath string, chapters []ChapterState) error {
+	if len(chapters) == 0 {
+		return fmt.Errorf("没有可追加的章节")
+	}
+
+	state.Chapters = append(state.Chapters, chapters...)
+	cfg.Story.ChapterCount = len(state.Chapters)
+	if state.StoryConfigSnapshot != nil {
+		snapshot := *state.StoryConfigSnapshot
+		snapshot.ChapterCount = len(state.Chapters)
+		state.StoryConfigSnapshot = &snapshot
+	} else {
+		snapshot := cfg.Story
+		state.StoryConfigSnapshot = &snapshot
+	}
+
+	if err := saveConfig(cfgPath, cfg); err != nil {
+		return fmt.Errorf("保存配置失败: %w", err)
+	}
+	if err := SaveProgress(progressPath, state); err != nil {
+		return fmt.Errorf("保存进度失败: %w", err)
+	}
+	_ = DeleteOutlineCheckpoint(OutlineCheckpointPath(progressPath))
+	return nil
+}
+
+var (
+	manualOutlineHeadingPattern = regexp.MustCompile(`(?m)^\s*(第\s*[一二三四五六七八九十百千两零〇\d]+\s*章(?:\s*[《「『"]?[^\n《》「」『』"]+[》」』"]?)?|Chapter\s+\d+(?:[^\n]*)?)\s*$`)
+	manualOutlineTitleZH      = regexp.MustCompile(`^\s*第\s*[一二三四五六七八九十百千两零〇\d]+\s*章(?:\s*[《「『"]?([^\n《》「」『』"]+)[》」』"]?)?\s*$`)
+	manualOutlineTitleEN      = regexp.MustCompile(`(?i)^\s*chapter\s+\d+\s*(?:[:：-]\s*|["“”])?(.*?)["”]?\s*$`)
+)
+
+func parseManualOutlineChapters(content string, startNum int, lang string) ([]ChapterState, error) {
+	content = strings.TrimSpace(strings.ReplaceAll(content, "\r\n", "\n"))
+	if content == "" {
+		return nil, fmt.Errorf("内容不能为空")
+	}
+
+	matches := manualOutlineHeadingPattern.FindAllStringIndex(content, -1)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("未识别到章节标题，请按“第66章《标题》”这样的格式粘贴")
+	}
+
+	chapters := make([]ChapterState, 0, len(matches))
+	for i, match := range matches {
+		end := len(content)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		segment := strings.TrimSpace(content[match[0]:end])
+		if segment == "" {
+			continue
+		}
+		parts := strings.SplitN(segment, "\n", 2)
+		heading := strings.TrimSpace(parts[0])
+		outline := ""
+		if len(parts) > 1 {
+			outline = strings.TrimSpace(parts[1])
+		}
+		if outline == "" {
+			return nil, fmt.Errorf("章节 %q 缺少内容", heading)
+		}
+		num := startNum + len(chapters)
+		chapters = append(chapters, ChapterState{
+			Num:     num,
+			Title:   extractManualOutlineTitle(heading, num, lang),
+			Outline: outline,
+			Status:  StatusPending,
+		})
+	}
+	if len(chapters) == 0 {
+		return nil, fmt.Errorf("未识别到可追加的章节")
+	}
+	return chapters, nil
+}
+
+func extractManualOutlineTitle(heading string, num int, lang string) string {
+	if m := manualOutlineTitleZH.FindStringSubmatch(heading); len(m) > 1 {
+		if title := strings.TrimSpace(m[1]); title != "" {
+			return title
+		}
+	}
+	if m := manualOutlineTitleEN.FindStringSubmatch(heading); len(m) > 1 {
+		if title := strings.TrimSpace(strings.Trim(m[1], `"“”`)); title != "" {
+			return title
+		}
+	}
+	return defaultManualOutlineChapterTitle(num, lang)
+}
+
+func buildManualOutlineChapters(startNum, count int, lang string) []ChapterState {
+	chapters := make([]ChapterState, count)
+	for i := 0; i < count; i++ {
+		num := startNum + i
+		chapters[i] = ChapterState{
+			Num:     num,
+			Title:   defaultManualOutlineChapterTitle(num, lang),
+			Status:  StatusPending,
+			Outline: "",
+		}
+	}
+	return chapters
+}
+
+func defaultManualOutlineChapterTitle(num int, lang string) string {
+	if NormalizeLanguage(lang) == LangEN {
+		return fmt.Sprintf("Chapter %d", num)
+	}
+	return fmt.Sprintf("第%d章", num)
+}
+
+func firstIncompleteOutlineChapter(state *Progress) int {
+	for _, ch := range state.Chapters {
+		if strings.TrimSpace(ch.Title) == "" || strings.TrimSpace(ch.Outline) == "" {
+			return ch.Num
+		}
+	}
+	return 0
+}
+
 func GenerateOutlineAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, settings *ProjectSettings, progressPath, cfgPath string, logger *LogBroadcaster) error {
 	var err error
 	if err = validateAPIConfig(apiCfg); err != nil {
@@ -497,7 +854,7 @@ func ConfirmOutlineAction(state *Progress, progressPath string) error {
 	return SaveProgress(progressPath, state)
 }
 
-func EditChapterOutline(state *Progress, chapterNum int, title, outline string) error {
+func EditChapterOutline(state *Progress, chapterNum int, title, outline string, selectedForeshadowIDs *[]int) error {
 	idx := -1
 	for i, ch := range state.Chapters {
 		if ch.Num == chapterNum {
@@ -508,10 +865,32 @@ func EditChapterOutline(state *Progress, chapterNum int, title, outline string) 
 	if idx == -1 {
 		return fmt.Errorf("章节 %d 不存在", chapterNum)
 	}
-	if state.Chapters[idx].Status != StatusPending {
-		return fmt.Errorf("只能编辑待定（pending）状态的章节大纲")
+	if state.Chapters[idx].Status == StatusWriting {
+		return fmt.Errorf("写作中的章节暂不能编辑大纲")
 	}
 	state.Chapters[idx].Title = title
 	state.Chapters[idx].Outline = outline
+	if selectedForeshadowIDs != nil {
+		state.Chapters[idx].SelectedForeshadowIDs = normalizeForeshadowIDs(*selectedForeshadowIDs)
+	}
 	return nil
+}
+
+func normalizeForeshadowIDs(ids []int) []int {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[int]bool, len(ids))
+	out := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

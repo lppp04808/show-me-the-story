@@ -158,16 +158,7 @@ func buildCharacterContextForLang(settings *ProjectSettings, chapterOutline, lan
 	var sb strings.Builder
 
 	if settings != nil && len(settings.Characters) > 0 {
-		var relevant []Character
-		for _, c := range settings.Characters {
-			if strings.Contains(chapterOutline, stripNameMarks(c.Name)) {
-				relevant = append(relevant, c)
-			}
-		}
-		if len(relevant) == 0 {
-			relevant = settings.Characters
-		}
-
+		relevant := selectRelevantCharacters(settings, chapterOutline, 6)
 		en := NormalizeLanguage(lang) == LangEN
 		for _, c := range relevant {
 			sb.WriteString(fmt.Sprintf("【%s】", c.Name))
@@ -219,31 +210,13 @@ func buildWorldviewContextForLang(settings *ProjectSettings, chapterOutline, lan
 	var sb strings.Builder
 
 	if len(settings.Worldview) > 0 {
-		var relevant []WorldviewEntry
-		for _, w := range settings.Worldview {
-			if strings.Contains(chapterOutline, w.Name) || strings.Contains(chapterOutline, w.Category) {
-				relevant = append(relevant, w)
-			}
-		}
-		if len(relevant) == 0 {
-			relevant = settings.Worldview
-		}
-		for _, w := range relevant {
+		for _, w := range selectRelevantWorldviewEntries(settings, chapterOutline, 5) {
 			sb.WriteString(fmt.Sprintf("【%s】(%s)\n  %s\n\n", w.Name, w.Category, w.Description))
 		}
 	}
 
 	if len(settings.Organizations) > 0 {
-		var relevantOrgs []Organization
-		for _, o := range settings.Organizations {
-			if strings.Contains(chapterOutline, o.Name) {
-				relevantOrgs = append(relevantOrgs, o)
-			}
-		}
-		if len(relevantOrgs) == 0 {
-			relevantOrgs = settings.Organizations
-		}
-		for _, o := range relevantOrgs {
+		for _, o := range selectRelevantOrganizations(settings, chapterOutline, 4) {
 			if en {
 				sb.WriteString(fmt.Sprintf("[Organization: %s] (%s)\n  %s\n", o.Name, o.Type, o.Description))
 				if len(o.Members) > 0 {
@@ -435,6 +408,34 @@ func formatMemoryForUpdatePrompt(entries []MemoryEntry, lang string) string {
 		}
 	}
 	return sb.String()
+}
+
+// formatSelectedForeshadowsForChapterLang renders only the foreshadows explicitly selected for a chapter.
+func formatSelectedForeshadowsForChapterLang(foreshadows []Foreshadow, selectedIDs []int, chapterNum int, lang string) string {
+	if len(selectedIDs) == 0 {
+		return ""
+	}
+	selected := make([]Foreshadow, 0, len(selectedIDs))
+	selectedSet := make(map[int]bool, len(selectedIDs))
+	for _, id := range selectedIDs {
+		selectedSet[id] = true
+	}
+	for _, fs := range foreshadows {
+		if selectedSet[fs.ID] {
+			selected = append(selected, fs)
+		}
+	}
+	if len(selected) == 0 {
+		return ""
+	}
+	base := formatActiveForeshadowsForChapterLang(selected, chapterNum, lang)
+	if base == "" {
+		return ""
+	}
+	if NormalizeLanguage(lang) == LangEN {
+		return base + "\n[Foreshadow integration requirement]\nMerge the selected foreshadows naturally into this chapter's outline and scene progression. They are writing guidance, not a checklist to be copied verbatim."
+	}
+	return base + "\n【伏笔融合要求】\n若已为本章勾选伏笔，请将这些伏笔自然融入本章大纲与场景推进中；它们是写作指导，不是逐条照抄的清单。"
 }
 
 // formatActiveForeshadowsForChapterLang renders the "active foreshadows" block in the requested language.

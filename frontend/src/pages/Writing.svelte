@@ -60,6 +60,10 @@
   }
   // 流式期间 $streamingContent 只含尾部窗口（性能保护），全文在生成结束后由 progress 拉取
   $: displayContent = isStreamingThis ? $streamingContent : (ch?.content || '');
+  $: if (ch && !showOutlineEdit) {
+    outlineDraft = ch.outline || '';
+    selectedForeshadowIDs = [...(ch.selected_foreshadow_ids || [])];
+  }
   $: if (ch && !showManualEdit) {
     manualContent = ch.content || '';
   }
@@ -68,7 +72,9 @@
   $: totalWords = chapters.reduce((sum, c) => sum + (c.content ? countProseUnits(c.content) : 0), 0);
 
   $: foreshadows = p?.foreshadows || [];
+  $: foreshadowOptions = foreshadows;
   $: fsActive = foreshadows.filter(f => f.status === 'planted' || f.status === 'progressing');
+  $: selectedForeshadows = foreshadows.filter(f => selectedForeshadowIDs.includes(f.id));
   $: fsOverdue = fsActive.filter(f => f.target_chapter > 0 && (currentIdx + 1) > f.target_chapter);
   $: fsNearTarget = fsActive.filter(f =>
     f.target_chapter > 0 && (currentIdx + 1) >= f.target_chapter - 2 && (currentIdx + 1) <= f.target_chapter
@@ -108,6 +114,9 @@
 
   let reviseFeedback = '';
   let showRevise = false;
+  let showOutlineEdit = false;
+  let outlineDraft = '';
+  let selectedForeshadowIDs = [];
   let showManualEdit = false;
   let manualContent = '';
   let contentEl;
@@ -128,6 +137,7 @@
   function selectChapter(i) {
     selectedChapter.set(i);
     showRevise = false;
+    showOutlineEdit = false;
     showManualEdit = false;
     reviseFeedback = '';
   }
@@ -178,13 +188,52 @@
     } catch (e) { addToast(e.message, 'error'); }
   }
 
+  async function saveOutlineEdit() {
+    if (!ch) return;
+    const title = (ch.title || '').trim();
+    const outline = outlineDraft.trim();
+    if (!title || !outline) {
+      addToast($t('writing.toasts.outlineRequired'), 'error');
+      return;
+    }
+    try {
+      await api('PUT', '/api/outline/' + ch.num, {
+        title,
+        outline,
+        selected_foreshadow_ids: selectedForeshadowIDs,
+      });
+      const next = await fetchProgressLite();
+      progress.set(next);
+      addToast($t('writing.toasts.outlineSaved', { num: ch.num }), 'success');
+      showOutlineEdit = false;
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  function cancelOutlineEdit() {
+    outlineDraft = ch?.outline || '';
+    selectedForeshadowIDs = [...(ch?.selected_foreshadow_ids || [])];
+    showOutlineEdit = false;
+  }
+
+  function toggleSelectedForeshadow(id, checked) {
+    if (checked) {
+      if (!selectedForeshadowIDs.includes(id)) {
+        selectedForeshadowIDs = [...selectedForeshadowIDs, id];
+      }
+      return;
+    }
+    selectedForeshadowIDs = selectedForeshadowIDs.filter(item => item !== id);
+  }
+
   async function saveManualEdit() {
     if (!ch) return;
     try {
+      const totalLines = (ch.content || '').split('\n').length;
       await api('POST', '/api/chapter/edit', {
         num: ch.num,
-        operation: 'replace_text',
-        old_text: ch.content || '',
+        operation: 'replace_lines',
+        start_line: 1,
+        end_line: totalLines,
         new_text: manualContent,
       });
       await fetchChapter(ch.num);
@@ -373,9 +422,59 @@
               </div>
 
               {#if ch.outline}
-                <details class="bg-base-300 rounded">
-                  <summary class="p-2 text-xs text-base-content/50 cursor-pointer select-none">{$t('writing.chapter.outline')}</summary>
-                  <div class="px-2 pb-2 text-sm text-base-content/70">{ch.outline}</div>
+                <details class="bg-base-300 rounded" open={showOutlineEdit}>
+                  <summary class="p-2 text-xs text-base-content/50 cursor-pointer select-none flex items-center gap-2">
+                    <span class="flex-1">{$t('writing.chapter.outline')}</span>
+                    <button
+                      class="btn btn-ghost btn-xs"
+                      on:click|preventDefault|stopPropagation={() => { showOutlineEdit = !showOutlineEdit; showRevise = false; showManualEdit = false; outlineDraft = ch.outline || ''; }}
+                      disabled={$taskRunning}
+                    >{$t('writing.btn.editOutline')}</button>
+                  </summary>
+                  {#if showOutlineEdit}
+                    <div class="px-2 pb-2 space-y-2">
+                      <textarea
+                        class="textarea textarea-sm w-full h-36 text-sm"
+                        bind:value={outlineDraft}
+                        disabled={$taskRunning}
+                        placeholder={$t('writing.outline.placeholder')}
+                      ></textarea>
+                      {#if foreshadowOptions.length > 0}
+                        <div class="rounded-lg bg-base-200/70 p-3 space-y-2">
+                          <div class="text-xs font-medium text-base-content/70">{$t('writing.outline.foreshadows')}</div>
+                          <div class="space-y-2 max-h-40 overflow-y-auto pr-1">
+                            {#each foreshadowOptions as fs}
+                              <label class="flex items-start gap-2 text-sm cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  class="checkbox checkbox-xs mt-0.5"
+                                  checked={selectedForeshadowIDs.includes(fs.id)}
+                                  on:change={(e) => toggleSelectedForeshadow(fs.id, e.currentTarget.checked)}
+                                  disabled={$taskRunning}
+                                />
+                                <div class="min-w-0">
+                                  <div class="font-medium">#{fs.id} {fs.name}</div>
+                                  <div class="text-xs text-base-content/60 whitespace-pre-wrap">{fs.description}</div>
+                                </div>
+                              </label>
+                            {/each}
+                          </div>
+                          {#if selectedForeshadows.length > 0}
+                            <p class="text-xs text-base-content/50">{$t('writing.outline.foreshadowHint', { names: selectedForeshadows.map(fs => `#${fs.id} ${fs.name}`).join('、') })}</p>
+                          {/if}
+                        </div>
+                      {/if}
+                      <div class="flex justify-between items-center">
+                        <span class="text-xs text-base-content/40">{$t('writing.outline.hint')}</span>
+                        <div class="flex gap-2">
+                          <button class="btn btn-ghost btn-xs" on:click={cancelOutlineEdit}>{$t('common.cancel')}</button>
+                          <button class="btn btn-primary btn-xs" on:click={saveOutlineEdit} disabled={$taskRunning || !outlineDraft.trim()}>{$t('writing.outline.save')}</button>
+                        </div>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="px-2 pb-2 text-sm text-base-content/70 whitespace-pre-wrap">{ch.outline}</div>
+                  {/if}
                 </details>
               {/if}
 
@@ -436,8 +535,8 @@
                   <button class="btn btn-success btn-sm" on:click={doConfirm} disabled={$taskRunning}>{$t('writing.btn.confirm')}</button>
                 {/if}
                 {#if ch.content && ch.status !== 'writing'}
-                  <button class="btn btn-ghost btn-sm" on:click={() => { showRevise = !showRevise; showManualEdit = false; }} disabled={$taskRunning}>{$t('writing.btn.revise')}</button>
-                  <button class="btn btn-ghost btn-sm" on:click={() => { showManualEdit = !showManualEdit; showRevise = false; manualContent = ch.content || ''; }} disabled={$taskRunning || isStreamingThis}>{$t('writing.btn.manualEdit')}</button>
+                  <button class="btn btn-ghost btn-sm" on:click={() => { showRevise = !showRevise; showOutlineEdit = false; showManualEdit = false; }} disabled={$taskRunning}>{$t('writing.btn.revise')}</button>
+                  <button class="btn btn-ghost btn-sm" on:click={() => { showManualEdit = !showManualEdit; showRevise = false; showOutlineEdit = false; manualContent = ch.content || ''; }} disabled={$taskRunning || isStreamingThis}>{$t('writing.btn.manualEdit')}</button>
                   {#if hasPolishSkills}
                     <button class="btn btn-ghost btn-sm" on:click={doPolish} disabled={$taskRunning} title={$t('writing.btn.polish.tip')}>{$t('writing.btn.polish')}</button>
                   {/if}

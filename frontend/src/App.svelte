@@ -79,6 +79,10 @@
     if (chatPanel) await chatPanel.sendMessageToChat(text);
   }
 
+  async function sendBriefToChat(text, topic = '') {
+    if (chatPanel?.sendBriefMessageToChat) await chatPanel.sendBriefMessageToChat(text, topic);
+  }
+
   function backToProjects() {
     currentProject.set(null);
   }
@@ -165,7 +169,7 @@
       <!-- Center: page content -->
       <main class="flex-1 min-w-0 overflow-y-auto p-4 border-r border-base-content/10">
         {#if $currentPage === 'config'}
-          <Config {sendToChat} />
+          <Config {sendBriefToChat} />
         {:else if $currentPage === 'outline'}
           <Outline {sendToChat} />
         {:else if $currentPage === 'writing'}

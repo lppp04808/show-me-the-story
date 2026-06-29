@@ -410,7 +410,7 @@ func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 
 	logger.InfoKey("log.chapter_modifying", ch.Num, ch.Title)
 
-	logger.StepInfo(1, 3, "正在根据意见修订正文...")
+	logger.StepInfo(1, 4, "正在根据意见修订正文...")
 	revisedContent, err := reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, feedback, settings, logger)
 	if err != nil {
 		return fmt.Errorf("修改章节失败: %w", err)
@@ -418,7 +418,7 @@ func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 	ch.Content = revisedContent
 	logger.InfoKey("log.prose_revised", countProseUnits(revisedContent))
 
-	logger.StepInfo(2, 3, "重新提炼摘要...")
+	logger.StepInfo(2, 4, "重新提炼摘要...")
 	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, ch.Content, logger)
 	if summary == "" {
 		return fmt.Errorf("摘要提炼失败或被取消")
@@ -426,10 +426,23 @@ func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 	ch.Summary = summary
 	logger.InfoKey("log.summary_done")
 
+	criticFailed := false
+	criticIssues := ""
+	if criticEnabled(cfg) {
+		logger.StepInfo(3, 4, "正在进行一致性审稿...")
+		criticResult := generateChapterCriticWithRetryLog(ctx, apiCfg, cfg, state, chapterIdx, ch.Content, summary, settings, logger)
+		criticFailed, criticIssues = parseChapterCriticResult(criticResult)
+		if criticFailed {
+			return fmt.Errorf("[一致性审稿] 发现问题: %s", criticIssues)
+		} else {
+			logger.InfoBilingual(defaultCriticPassZH, defaultCriticPassEN)
+		}
+	}
+
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 
 	if chapterIdx+1 < len(state.Chapters) {
-		logger.StepInfo(3, 3, "正在修订后续章节大纲...")
+		logger.StepInfo(4, 4, "正在修订后续章节大纲...")
 		if err := reviseSubsequentOutlines(ctx, apiCfg, cfg, state, chapterIdx, feedback); err != nil {
 			logger.WarnKey("log.subsequent_outline_failed", err)
 		} else {
@@ -504,7 +517,7 @@ func ReviseSpecificChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Co
 
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 
-	if err := SaveProgress(progressPath, state); err != nil {
+	if err = SaveProgress(progressPath, state); err != nil {
 		return err
 	}
 
@@ -557,7 +570,10 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 		snapshot = &cfg.Story
 	}
 
-	foreshadowContext := formatActiveForeshadowsForChapterLang(state.Foreshadows, ch.Num, lang)
+	foreshadowContext := formatSelectedForeshadowsForChapterLang(state.Foreshadows, ch.SelectedForeshadowIDs, ch.Num, lang)
+	if foreshadowContext == "" {
+		foreshadowContext = formatActiveForeshadowsForChapterLang(state.Foreshadows, ch.Num, lang)
+	}
 
 	characterContext := buildCharacterContextForLang(settings, ch.Outline, lang)
 	worldviewContext := buildWorldviewContextForLang(settings, ch.Outline, lang)

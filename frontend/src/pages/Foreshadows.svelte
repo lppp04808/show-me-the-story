@@ -15,7 +15,7 @@
 
   let showForm = false;
   let editing = null;
-  let form = { name: '', description: '', plant_chapter: 1, target_chapter: 0, status: 'planted', resolution: '' };
+  let form = { name: '', description: '', plant_chapter: 1, target_chapter: '', status: 'planted', resolution: '' };
 
   $: statusMeta = {
     planted:     { label: $t('fs.status.planted'),     cls: 'badge-info' },
@@ -115,7 +115,7 @@
 
   function openCreate() {
     editing = null;
-    form = { name: '', description: '', plant_chapter: 1, target_chapter: 0, status: 'planted', resolution: '' };
+    form = { name: '', description: '', plant_chapter: 1, target_chapter: '', status: 'planted', resolution: '' };
     showForm = true;
   }
 
@@ -125,7 +125,7 @@
       name: fs.name,
       description: fs.description,
       plant_chapter: fs.plant_chapter || 1,
-      target_chapter: fs.target_chapter || 0,
+      target_chapter: fs.target_chapter > 0 ? fs.target_chapter : '',
       status: fs.status || 'planted',
       resolution: fs.resolution || '',
     };
@@ -137,24 +137,22 @@
       addToast($t('fs.form.required'), 'error');
       return;
     }
+    const payload = {
+      name: form.name.trim(),
+      description: form.description.trim(),
+      plant_chapter: Number(form.plant_chapter) || 1,
+      target_chapter: form.target_chapter === '' ? null : Number(form.target_chapter),
+    };
     try {
       if (editing) {
         await api('PUT', '/api/foreshadows/' + editing.id, {
-          name: form.name.trim(),
-          description: form.description.trim(),
-          plant_chapter: form.plant_chapter,
-          target_chapter: form.target_chapter,
+          ...payload,
           status: form.status,
           resolution: form.resolution.trim(),
         });
         addToast($t('fs.form.saved.update'), 'success');
       } else {
-        await api('POST', '/api/foreshadows', {
-          name: form.name.trim(),
-          description: form.description.trim(),
-          plant_chapter: form.plant_chapter,
-          target_chapter: form.target_chapter,
-        });
+        await api('POST', '/api/foreshadows', payload);
         addToast($t('fs.form.saved.create'), 'success');
       }
       showForm = false;
